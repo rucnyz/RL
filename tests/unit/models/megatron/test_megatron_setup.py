@@ -112,6 +112,8 @@ class TestApplyParallelismConfig:
                 "pipeline_model_parallel_size": 2,
                 "num_layers_in_first_pipeline_stage": None,
                 "num_layers_in_last_pipeline_stage": None,
+                "virtual_pipeline_model_parallel_size": None,
+                "pipeline_model_parallel_layout": None,
                 "sequence_parallel": True,
                 "context_parallel_size": 1,
             },

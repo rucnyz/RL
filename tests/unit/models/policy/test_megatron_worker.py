@@ -123,6 +123,8 @@ def create_megatron_test_config(
             "pipeline_model_parallel_size": pp,
             "num_layers_in_first_pipeline_stage": None,
             "num_layers_in_last_pipeline_stage": None,
+            "virtual_pipeline_model_parallel_size": None,
+            "pipeline_model_parallel_layout": None,
             "context_parallel_size": 1,
             "pipeline_dtype": precision,
             "sequence_parallel": sequence_parallel,
