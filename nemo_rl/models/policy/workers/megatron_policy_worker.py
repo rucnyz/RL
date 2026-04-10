@@ -561,7 +561,7 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                 from source_state_dict; if False, skip such keys.
         """
         for chunk, chunk_sd in zip(self.model, source_state_dict):
-            for state_dict_key, param_or_buf in chunk.state_dict.items():
+            for state_dict_key, param_or_buf in chunk.state_dict().items():
                 if (
                     not isinstance(param_or_buf, torch.Tensor)
                     or "draft_model." in state_dict_key
