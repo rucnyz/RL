@@ -612,7 +612,7 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
 
         with torch.no_grad():
             # Save original per-chunk state dicts
-            model_state_dict = []
+            model_state_dict = dict()
             for chunk in self.model:
                 chunk_sd = {}
                 for name, item in chunk.state_dict().items():
@@ -621,7 +621,7 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                             device="cpu", non_blocking=True, copy=True
                         )
                     chunk_sd[name] = item
-                model_state_dict.append(chunk_sd)
+                model_state_dict.update(chunk_sd)
 
             # Swap reference model state_dict into self.model (reference weights + optional FP8 extra_state)
             self._apply_state_dict_to_model(
