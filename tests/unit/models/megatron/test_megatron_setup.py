@@ -163,6 +163,8 @@ class TestApplyParallelismConfig:
         assert model_cfg.pipeline_model_parallel_size == 2
         assert model_cfg.sequence_parallel is True
         assert model_cfg.context_parallel_size == 1
+        assert model_cfg.virtual_pipeline_model_parallel_size is None
+        assert model_cfg.pipeline_model_parallel_layout is None
 
     def test_context_parallel_requires_sequence_packing(self):
         """Test that context parallelism > 1 requires sequence packing."""
@@ -175,6 +177,8 @@ class TestApplyParallelismConfig:
                 "pipeline_model_parallel_size": 1,
                 "num_layers_in_first_pipeline_stage": None,
                 "num_layers_in_last_pipeline_stage": None,
+                "virtual_pipeline_model_parallel_size": None,
+                "pipeline_model_parallel_layout": None,
                 "sequence_parallel": False,
                 "context_parallel_size": 2,
             },
@@ -197,6 +201,8 @@ class TestApplyParallelismConfig:
                 "pipeline_model_parallel_size": 1,
                 "num_layers_in_first_pipeline_stage": None,
                 "num_layers_in_last_pipeline_stage": None,
+                "virtual_pipeline_model_parallel_size": None,
+                "pipeline_model_parallel_layout": None,
                 "sequence_parallel": False,
                 "context_parallel_size": 4,
             },
@@ -1051,6 +1057,8 @@ class TestSetupModelAndOptimizer:
         mock_megatron_cfg.model.vocab_size = 32000
         mock_megatron_cfg.model.make_vocab_size_divisible_by = 128
         mock_megatron_cfg.model.tensor_model_parallel_size = 1
+        mock_megatron_cfg.model.virtual_pipeline_model_parallel_size = None
+        mock_megatron_cfg.model.pipeline_model_parallel_layout = None
         # Enable param gather overlap
         mock_megatron_cfg.ddp.overlap_param_gather = True
         mock_megatron_cfg.ddp.align_param_gather = True
