@@ -115,7 +115,7 @@ def helpsteer3_data_processor(
     extra_env_info = {"ground_truth": ground_truth}
 
     loss_multiplier = 1.0
-    if length > max_seq_length:
+    if length >= max_seq_length:
         # Truncate if too long
         for chat_message in message_log:
             chat_message["token_ids"] = chat_message["token_ids"][
@@ -169,7 +169,7 @@ def sft_processor(
     length = sum(len(m["token_ids"]) for m in message_log)
 
     loss_multiplier = 1.0
-    if length > max_seq_length:
+    if length >= max_seq_length:
         # make smaller and mask out
         for message in message_log:
             message["token_ids"] = message["token_ids"][
@@ -216,9 +216,7 @@ def preference_preprocessor(
         ...     ]
         ... }
         >>>
-        >>> processed = preference_preprocessor(datum, task_spec, tokenizer, max_seq_length=128, idx=0)  # doctest: +ELLIPSIS
-        <BLANKLINE>
-        ...
+        >>> processed = preference_preprocessor(datum, task_spec, tokenizer, max_seq_length=128, idx=0)
         >>> len(processed["message_log_chosen"])
         2
         >>> processed["message_log_chosen"][0]["content"]
@@ -361,7 +359,7 @@ def math_data_processor(
     length = sum(len(m["token_ids"]) for m in message_log)
 
     loss_multiplier = 1.0
-    if length > max_seq_length:
+    if length >= max_seq_length:
         # make smaller and mask out
         for indiv_message in message_log:
             indiv_message["token_ids"] = indiv_message["token_ids"][
@@ -457,33 +455,40 @@ def math_hf_data_processor(
     problem = user_message[0]["content"]
     extra_env_info = {"ground_truth": user_message[1]["content"]}
 
-    message_log: LLMMessageLogType = []
+    # merge system prompt and user prompt
+    message_list = []
+    if task_data_spec.system_prompt:
+        message_list.append(
+            {
+                "role": "system",
+                "content": task_data_spec.system_prompt,
+            }
+        )
     formatted_content = (
         task_data_spec.prompt.format(problem) if task_data_spec.prompt else problem
     )
-    user_message = {
-        "role": "user",
-        "content": formatted_content,
-    }
-    message: list[str] = tokenizer.apply_chat_template(  # type: ignore
-        [user_message],
+    message_list.append({"role": "user", "content": formatted_content})
+
+    message: str = tokenizer.apply_chat_template(  # type: ignore
+        message_list,
         tokenize=False,
         add_generation_prompt=True,
         add_special_tokens=False,
     )
 
-    user_message["token_ids"] = tokenizer(
+    token_ids = tokenizer(
         message,
         return_tensors="pt",
         add_special_tokens=False,
     )["input_ids"][0]
-    user_message["content"] = message
-    message_log.append(user_message)
+    message_log: LLMMessageLogType = [
+        {"role": "user", "content": message, "token_ids": token_ids}
+    ]
 
     length = sum(len(m["token_ids"]) for m in message_log)
 
     loss_multiplier = 1.0
-    if length > max_seq_length:
+    if length >= max_seq_length:
         # make smaller and mask out
         for chat_message in message_log:
             chat_message["token_ids"] = chat_message["token_ids"][
@@ -605,6 +610,10 @@ def vlm_hf_data_processor(
     # specifically for gemma, we need to add token_type_ids to the user message as a sequence-type value
     if "token_type_ids" in message:
         user_message["token_type_ids"] = message["token_type_ids"][0]
+
+    # for qwen2.5-vl (transformers>=5.3), mm_token_type_ids tells the model which tokens are text/image/video for 3D RoPE
+    if "mm_token_type_ids" in message:
+        user_message["mm_token_type_ids"] = message["mm_token_type_ids"][0]
 
     ### append to user message
     message_log.append(user_message)
