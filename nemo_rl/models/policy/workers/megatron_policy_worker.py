@@ -545,7 +545,7 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
 
     def _apply_state_dict_to_model(
         self,
-        source_state_dict: list[dict],
+        source_state_dict: dict,
         *,
         raise_if_key_missing: bool = False,
     ) -> None:
@@ -560,20 +560,20 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
             raise_if_key_missing: If True, raise when a key in self.model.state_dict() is missing
                 from source_state_dict; if False, skip such keys.
         """
-        for chunk, chunk_sd in zip(self.model, source_state_dict):
+        for chunk in self.model:
             for state_dict_key, param_or_buf in chunk.state_dict().items():
                 if (
                     not isinstance(param_or_buf, torch.Tensor)
                     or "draft_model." in state_dict_key
                 ):
                     continue
-                if state_dict_key not in chunk_sd:
+                if state_dict_key not in source_state_dict:
                     if raise_if_key_missing:
                         raise ValueError(
                             f"Key '{state_dict_key}' not in source state_dict."
                         )
                     continue
-                source_value = chunk_sd[state_dict_key]
+                source_value = source_state_dict[state_dict_key]
 
                 # Case 1: Same shape → in-place copy (parameters / buffers)
                 if (

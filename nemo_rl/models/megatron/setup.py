@@ -1137,7 +1137,7 @@ def setup_reference_model_state(
 
     # reference_state_dict is a list of per-chunk state dicts (one per model chunk).
     # With VPP, there are multiple chunks per PP rank; without VPP there is one.
-    reference_state_dict = []
+    reference_state_dict = dict()
 
     if should_load_checkpoint or use_peft:
         for chunk in reference_model:
@@ -1152,7 +1152,7 @@ def setup_reference_model_state(
                 else:
                     cpu_item = item
                 chunk_state_dict[name] = cpu_item
-            reference_state_dict.append(chunk_state_dict)
+            reference_state_dict.update(chunk_state_dict)
         print("Reference model loaded")
     else:
         print("Reference model not loaded")
