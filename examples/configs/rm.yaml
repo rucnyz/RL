@@ -89,6 +89,7 @@ policy:
     sequence_parallel: false
     virtual_pipeline_model_parallel_size: null
     pipeline_model_parallel_layout: null
+    gradient_accumulation_fusion: false
 
     optimizer:
       optimizer: "adam"
