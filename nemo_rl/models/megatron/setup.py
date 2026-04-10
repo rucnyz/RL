@@ -373,8 +373,12 @@ def _apply_parallelism_config(model_cfg: Any, config: PolicyConfig) -> None:
     ]
     model_cfg.sequence_parallel = config["megatron_cfg"]["sequence_parallel"]
     model_cfg.context_parallel_size = config["megatron_cfg"]["context_parallel_size"]
-    model_cfg.virtual_pipeline_model_parallel_size = config["megatron_cfg"]["virtual_pipeline_model_parallel_size"]
-    model_cfg.pipeline_model_parallel_layout = config["megatron_cfg"]["pipeline_model_parallel_layout"]
+    model_cfg.virtual_pipeline_model_parallel_size = config["megatron_cfg"][
+        "virtual_pipeline_model_parallel_size"
+    ]
+    model_cfg.pipeline_model_parallel_layout = config["megatron_cfg"][
+        "pipeline_model_parallel_layout"
+    ]
 
     if model_cfg.context_parallel_size > 1:
         assert config["sequence_packing"]["enabled"], (
@@ -989,7 +993,9 @@ def setup_reference_model_state(
             chunk_state_dict = {}
             for name, item in chunk.state_dict().items():
                 if isinstance(item, torch.Tensor):
-                    cpu_item = item.detach().to(device="cpu", non_blocking=True, copy=True)
+                    cpu_item = item.detach().to(
+                        device="cpu", non_blocking=True, copy=True
+                    )
                     del item
                 else:
                     cpu_item = item

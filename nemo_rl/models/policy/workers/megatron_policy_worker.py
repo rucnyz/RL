@@ -563,7 +563,9 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                 chunk_sd = {}
                 for name, item in chunk.state_dict().items():
                     if isinstance(item, torch.Tensor):
-                        item = item.detach().to(device="cpu", non_blocking=True, copy=True)
+                        item = item.detach().to(
+                            device="cpu", non_blocking=True, copy=True
+                        )
                     chunk_sd[name] = item
                 model_state_dict.append(chunk_sd)
 
@@ -1173,7 +1175,9 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         # If given a list of model chunks (VPP), move each chunk and return the list.
         if isinstance(model, list):
             return [
-                self.move_model(chunk, device, move_params=move_params, move_grads=move_grads)
+                self.move_model(
+                    chunk, device, move_params=move_params, move_grads=move_grads
+                )
                 for chunk in model
             ]
 
@@ -1359,7 +1363,9 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                             "name": name,
                             "tensor_model_parallel": tensor_model_parallel,
                             "partition_dim": getattr(param, "partition_dim", None),
-                            "partition_stride": getattr(param, "partition_stride", None),
+                            "partition_stride": getattr(
+                                param, "partition_stride", None
+                            ),
                             "shape": list(param.shape),
                         }
                     )
