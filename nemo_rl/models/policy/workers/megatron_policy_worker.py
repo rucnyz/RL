@@ -1653,6 +1653,12 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
 
         return final_result
 
+    def get_gpu_info(self) -> dict[str, Any]:
+        """Return information about the GPU being used by this worker."""
+        from nemo_rl.models.policy.utils import get_gpu_info
+
+        return get_gpu_info(self.model[0])
+
 
 @ray.remote(
     runtime_env=get_runtime_env_for_policy_worker("megatron_policy_worker")
