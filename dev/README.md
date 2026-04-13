@@ -58,7 +58,7 @@ uv add --editable "/data/yuzhou/projects/opensage-adk-dev"
 # 2. Install harbor CLI separately (subprocess only, avoids dep conflicts)
 pip install "harbor>=0.3.0"
 
-# 3. Prepare prompts from Harbor tasks (auto-downloads swebench from registry)
+# 3. Prepare prompts from Harbor tasks (auto-downloads swebench-verified from registry)
 uv run --extra opensage python dev/prepare_harbor_prompts.py \
   --tasks  swebench-verified -o dev/data/harbor_prompts.jsonl
 
