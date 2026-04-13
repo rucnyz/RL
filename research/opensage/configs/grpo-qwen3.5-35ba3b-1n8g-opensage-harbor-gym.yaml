@@ -60,7 +60,10 @@ policy:
         tool_parser: qwen3_xml
 
     colocated:
-      enabled: true
+      enabled: false
+      resources:
+        gpus_per_node: 4
+        num_nodes: 1
 
 data:
   max_input_seq_length: null
