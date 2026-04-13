@@ -91,9 +91,40 @@ def main() -> None:
     pprint.pprint(config)
 
     config["logger"]["log_dir"] = get_next_experiment_dir(config["logger"]["log_dir"])
-    print(f"Using log directory: {config['logger']['log_dir']}")
+    log_dir = config["logger"]["log_dir"]
+    os.makedirs(log_dir, exist_ok=True)
+    print(f"Using log directory: {log_dir}")
     if config["checkpointing"]["enabled"]:
         print(f"Using checkpoint directory: {config['checkpointing']['checkpoint_dir']}")
+
+    # Tee stdout/stderr to a log file in the same directory as training JSONL
+    import sys
+
+    class Tee:
+        """Write to both a file and the original stream."""
+
+        def __init__(self, stream, filepath):
+            self.stream = stream
+            self.file = open(filepath, "a")
+
+        def write(self, data):
+            self.stream.write(data)
+            self.file.write(data)
+            self.file.flush()
+
+        def flush(self):
+            self.stream.flush()
+            self.file.flush()
+
+        def fileno(self):
+            return self.stream.fileno()
+
+        def isatty(self):
+            return self.stream.isatty()
+
+    sys.stdout = Tee(sys.stdout, os.path.join(log_dir, "stdout.log"))
+    sys.stderr = Tee(sys.stderr, os.path.join(log_dir, "stderr.log"))
+    print(f"Logging stdout/stderr to {log_dir}/stdout.log and stderr.log")
 
     init_ray()
 
@@ -105,6 +136,10 @@ def main() -> None:
         tokenizer,
         has_refit_draft_weights=has_refit_draft_weights,
     )
+
+    # Inject log_dir into env config so OpenSageEnvironment can write live trajectories
+    for env_name in config.get("env", {}):
+        config["env"][env_name]["log_dir"] = log_dir
 
     (
         dataset,

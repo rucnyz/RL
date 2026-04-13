@@ -35,24 +35,23 @@ def opensage_data_processor(
 ) -> DatumSpec:
     """Process a datum for OpenSage Harbor tasks.
 
-    Expects datum_dict with 'prompt' (instruction text) and optionally
-    'task_id', 'task_dir' fields from prepare_harbor_prompts.py.
+    Expects datum_dict with 'messages', 'extra_env_info' (containing
+    'task_id' and 'task_dir'), and 'task_name' from OpenSageDataset.
     """
-    prompt = datum_dict.get("prompt", datum_dict.get("input", ""))
+    messages = datum_dict["messages"]
+    if task_data_spec.system_prompt:
+        messages = [{"role": "system", "content": task_data_spec.system_prompt}] + messages
 
     message_log: LLMMessageLogType = get_formatted_message_log(
-        prompt_text=prompt,
-        system_prompt=task_data_spec.system_prompt,
-        tokenizer=tokenizer,
+        messages,
+        tokenizer,
+        task_data_spec,
     )
 
     length = sum(len(m.get("token_ids", [])) for m in message_log)
     loss_multiplier = 1.0 if length < (max_seq_length or float("inf")) else 0.0
 
-    extra_env_info: dict[str, Any] = {
-        "task_id": datum_dict.get("task_id", f"task_{idx}"),
-        "task_dir": datum_dict.get("task_dir", ""),
-    }
+    extra_env_info: dict[str, Any] = datum_dict["extra_env_info"]
 
     output: DatumSpec = {
         "message_log": message_log,
@@ -60,7 +59,6 @@ def opensage_data_processor(
         "extra_env_info": extra_env_info,
         "loss_multiplier": loss_multiplier,
         "idx": idx,
+        "task_name": datum_dict["task_name"],
     }
-    if "task_name" in datum_dict:
-        output["task_name"] = datum_dict["task_name"]
     return output

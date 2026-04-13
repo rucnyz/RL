@@ -59,8 +59,8 @@ class OpenSageDataset(RawDataset):
                 {"role": "user", "content": data[self.input_key]},
             ],
             "extra_env_info": {
-                "task_id": data.get("task_id", ""),
-                "task_dir": data.get("task_dir", ""),
+                "task_id": data["task_id"],
+                "task_dir": data["task_dir"],
             },
             "task_name": self.task_name,
         }
