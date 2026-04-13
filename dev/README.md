@@ -29,12 +29,26 @@ NeMo RL                                     OpenSageEnvironment
 
 ## Quick Start
 
-```bash
-# 1. Install opensage
-pip install -e /path/to/opensage-adk-dev
+### Prerequisites
 
-# 2. Run GRPO training with OpenSage environment
-python examples/run_grpo.py --config examples/configs/my_config.yaml
+See the upstream [NeMo RL README](https://github.com/NVIDIA-NeMo/RL#prerequisites) for full setup, or:
+
+```bash
+# Clone this fork
+git clone https://github.com/rucnyz/RL.git && cd RL
+
+# Create venv (NeMo RL uses uv)
+uv venv
+
+# Install opensage
+pip install -e /path/to/opensage-adk-dev
+```
+
+### Run training
+
+```bash
+# GRPO training with OpenSage environment
+uv run python examples/run_grpo.py --config examples/configs/my_config.yaml
 ```
 
 ### Example Config
