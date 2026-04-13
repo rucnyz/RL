@@ -37,18 +37,20 @@ See the upstream [NeMo RL README](https://github.com/NVIDIA-NeMo/RL#prerequisite
 # Clone this fork
 git clone https://github.com/rucnyz/RL.git && cd RL
 
-# Create venv (NeMo RL uses uv)
+# Create venv
 uv venv
-
-# Install opensage
-pip install -e /path/to/opensage-adk-dev
 ```
 
 ### Run training
 
 ```bash
-# GRPO training with OpenSage environment
-uv run python examples/run_grpo.py --config examples/configs/my_config.yaml
+# GRPO with vLLM backend + OpenSage environment
+uv run --extra vllm --extra opensage python examples/run_grpo.py \
+  --config examples/configs/my_config.yaml
+
+# GRPO with Megatron backend + OpenSage environment
+uv run --extra mcore --extra opensage python examples/run_grpo.py \
+  --config examples/configs/my_config.yaml
 ```
 
 ### Example Config
