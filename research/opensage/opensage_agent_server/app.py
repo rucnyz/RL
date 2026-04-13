@@ -248,7 +248,7 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
         model_server_config = get_first_server_config_dict(
             global_config_dict, server_name,
         )
-        return f"http://{model_server_config['host']}:{model_server_config['port']}/v1"
+        return f"http://{model_server_config['host']}:{model_server_config['port']}"
 
     async def run(self, body: OpenSageRunRequest) -> OpenSageVerifyResponse:
         async with self.sem:
