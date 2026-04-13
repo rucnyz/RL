@@ -96,6 +96,7 @@ env:
         vllm_model:
           uses_reasoning_parser: false
           replace_developer_role_with_system: true
+          return_token_id_information: true
           extra_body:
             chat_template_kwargs:
               enable_thinking: false
