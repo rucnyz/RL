@@ -327,7 +327,7 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                     user_message = msg.get("content", "")
                     break
 
-            output_dir = str(Path(self.config.jobs_dir) / task_id)
+            output_dir = str(Path(self.config.jobs_dir) / f"{task_id}_{uuid4().hex[:8]}")
 
             try:
                 # Run via Ray remote (non-blocking)
