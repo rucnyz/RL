@@ -1,4 +1,5 @@
 -e nemo-gym[dev] @ ../..
 -e opensage @ /data/yuzhou/projects/opensage-adk-dev
+google-adk>=1.25.1
 docker
 aiohttp
