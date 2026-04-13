@@ -6,153 +6,132 @@ Train agents on [Harbor](https://github.com/harbor-ai/harbor)-format benchmarks
 
 ## Architecture
 
+Two modes available:
+
+**NemoGym mode (recommended)** — NemoGym handles the full multi-turn agent loop:
+
 ```
-NeMo RL                                     OpenSageEnvironment
-+-------------------------+
-| Generation (vLLM/SGLang) |
-|   model outputs response |
-|   with tool calls        +------------>  Parse tool calls
-|                          |              Execute in Docker sandbox
-| Multi-turn rollout loop  |              Return observation
-|   <- observation         |<------------
-|   -> next generation     |
-|   ...                    |
-|                          +------------>  On termination:
-| Policy update            |              Run tests/test.sh
-| (Megatron/FSDP2)         |<------------  Return reward (0 or 1)
-+-------------------------+
+NeMo RL (training)                    NemoGym
++-------------------+       +-------------------------------+
+| Policy update     |       | vLLM HTTP server (generation) |
+| (Megatron/FSDP2)  |       |   + chat template (tools)     |
+|                   |       |   + logprob tracking           |
+| Async GRPO        |       |                               |
+| (per-sample       | <---> | Agent (simple_agent)          |
+|  parallel)        |       |   + multi-turn loop            |
++-------------------+       |                               |
+                            | OpenSage Resources Server     |
+                            |   + Docker sandbox exec       |
+                            |   + Harbor test verification  |
+                            +-------------------------------+
 ```
 
-## Quick Start (NemoGym mode — recommended)
+**Legacy mode** — NeMo RL controls the generation loop directly:
 
-All commands are run from the repo root.
+```
+NeMo RL (vLLM generate) → OpenSageEnvironment (manual tool parse + Docker exec)
+```
+
+## Quick Start (NemoGym mode)
 
 ```bash
-# 1. Link OpenSage resources server into NemoGym
+# 1. Link OpenSage resources server into NemoGym (one-time setup)
 ln -s ../../../../research/opensage/opensage_resources_server \
   3rdparty/Gym-workspace/Gym/resources_servers/opensage_resources_server
 
-# 2. Prepare NemoGym-format prompts (includes system prompt + tool definitions)
+# 2. Prepare data (from repo root or research/opensage/)
 cd research/opensage
 uv run python prepare_harbor_prompts.py \
   --tasks swebench-verified -o data/harbor_prompts.jsonl
 
-# 3. Run GRPO training via NemoGym (async per-sample rollouts)
+# 3. Run training
 uv run python run_grpo_gym.py \
   --config configs/grpo-qwen3.5-35ba3b-1n8g-opensage-harbor-gym.yaml
 ```
 
-### Quick Start (manual env mode — legacy)
+### Quick Start (legacy mode)
 
 ```bash
 cd research/opensage
-
-# 1. Prepare prompts
 uv run python prepare_harbor_prompts.py \
   --tasks swebench-verified -o data/harbor_prompts.jsonl
 
-# 2. Run GRPO training (sync rollouts, manual tool parsing)
 uv run python run_grpo.py \
   --config configs/grpo-qwen3.5-35ba3b-1n8g-opensage-harbor.yaml
 ```
 
 ## How It Works
 
-The driver script `run_grpo.py` registers opensage-specific components into
-NeMo RL's registries at import time -- no core library changes needed:
+### NemoGym mode
 
-- `OpenSageDataset` into `DATASET_REGISTRY`
-- `opensage_data_processor` into `PROCESSOR_REGISTRY`
-- `OpenSageEnvironment` into `ENV_REGISTRY` and `ACTOR_ENVIRONMENT_REGISTRY`
+`run_grpo_gym.py` uses NemoGym's microservice architecture:
 
-Then it delegates to the standard GRPO training loop.
+- **OpenSage Resources Server** (`opensage_resources_server/app.py`): a NemoGym
+  `SimpleResourcesServer` providing Docker sandbox tool execution
+  (`/run_terminal_command`, `/view_file`, `/str_replace_edit`) and Harbor test
+  verification (`/verify`). Symlinked into NemoGym's `resources_servers/` directory.
+- **NemoGym simple_agent**: handles the multi-turn agent loop (LLM call → tool call
+  → LLM call → ...) with proper system prompt and tool definitions from the chat
+  template.
+- **vLLM HTTP server**: exposed by NeMo RL with `expose_http_server: true`,
+  provides generation with logprob tracking via OpenAI-compatible API.
+
+Data format (`prepare_harbor_prompts.py` generates NemoGym-compatible JSONL):
+```json
+{
+  "responses_create_params": {
+    "input": [
+      {"role": "developer", "content": "system prompt..."},
+      {"role": "user", "content": "instruction from Harbor task"}
+    ],
+    "tools": [{"name": "run_terminal_command", ...}, ...]
+  },
+  "verifier_metadata": {"task_id": "...", "task_dir": "..."}
+}
+```
+
+### Legacy mode
+
+`run_grpo.py` registers opensage-specific components into NeMo RL's registries
+at import time (dataset, processor, environment). NeMo RL controls generation
+and calls `OpenSageEnvironment.step()` per turn, which manually parses tool
+calls and executes them in Docker.
 
 ## Running with Docker
 
-NeMo RL's worker venvs are pre-cached inside the official Docker image, avoiding
-build-time GPU issues (e.g. `nv-grouped-gemm` for automodel). If you use a
-Megatron-based config (like the one in this project), bare-metal `uv run` works
-fine. Docker is still useful for reproducibility or cluster deployments.
-
 ```bash
-# 1. Build the container from this fork (includes research/opensage in workspace)
+# Build container
 docker buildx build --build-context nemo-rl=. \
   --target release -f docker/Dockerfile \
   --tag nemo-rl-opensage:latest .
 
-# 2. Launch with GPU access
+# Launch
 docker run --gpus all --rm -it \
   --network host --ipc host \
   -v $PWD:$PWD -w $PWD/research/opensage \
-  nemo-rl-opensage:latest \
-  bash
-
-# 3. Inside the container: install opensage (not in base image)
-uv pip install --python /opt/nemo_rl_venv/bin/python \
-  "opensage @ git+https://github.com/opensage-agent/opensage-adk-dev.git"
-
-# 4. Prepare data & run
-python prepare_harbor_prompts.py --tasks swebench-verified -o data/harbor_prompts.jsonl
-python run_grpo.py --config configs/grpo-qwen3.5-35ba3b-1n8g-opensage-harbor.yaml
-```
-
-To use a local opensage checkout instead, add a mount:
-
-```bash
-docker run --gpus all --rm -it \
-  --network host --ipc host \
-  -v $PWD:$PWD -w $PWD/research/opensage \
-  -v /path/to/opensage-adk-dev:/path/to/opensage-adk-dev \
   nemo-rl-opensage:latest bash
 
-# then inside:
-uv pip install --python /opt/nemo_rl_venv/bin/python -e /path/to/opensage-adk-dev
-```
-
-## Using Local OpenSage (for development)
-
-The `pyproject.toml` points to a local editable checkout by default.
-To switch to the GitHub version, edit `[tool.uv.sources]`:
-
-```toml
-opensage = { git = "https://github.com/opensage-agent/opensage-adk-dev.git" }
+# Inside container
+uv pip install --python /opt/nemo_rl_venv/bin/python \
+  "opensage @ git+https://github.com/opensage-agent/opensage-adk-dev.git"
+python run_grpo_gym.py
 ```
 
 ## Viewing Trajectories
 
-NeMo RL logs training and validation trajectories as JSONL files in the `logs/`
-directory during training (`train_data_step{N}.jsonl`, `val_data_step{N}.jsonl`).
-
 Use [nemotron-rl-viewer](https://github.com/rucnyz/nemotron-rl-viewer) to
-browse them interactively:
+browse training logs interactively:
 
 ```bash
-# Clone and install (requires Node.js >= 20)
-git clone https://github.com/rucnyz/nemotron-rl-viewer.git /data/yuzhou/projects/nemotron-rl-viewer
-cd /data/yuzhou/projects/nemotron-rl-viewer
-npm install
-
-# Start the viewer
+git clone https://github.com/rucnyz/nemotron-rl-viewer.git
+cd nemotron-rl-viewer && npm install
 npx next dev --port 3000
 ```
 
-Then open `http://localhost:3000` and enter the logs directory path
-(e.g. `/data/yuzhou/projects/RL/research/opensage/logs`).
+Open `http://localhost:3000` and enter the logs directory path.
 
-Features:
-- File browser for all JSONL log files
-- Conversation view with role-colored messages (user/assistant/system/tool)
-- Reward statistics (accuracy, mean, range)
-- Sort by index, reward, or advantage
-- Filter by reward (all / positive / zero)
-- Pagination for large files
-
-To also see samples printed in the terminal during validation, set:
-
-```yaml
-logger:
-  num_val_samples_to_print: 5
-```
+Features: file browser, conversation viewer with role coloring, reward stats,
+rollout turn-by-turn view with tool call details, log viewer with ANSI colors.
 
 ## Updating Dependencies
 
