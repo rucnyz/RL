@@ -51,38 +51,24 @@ RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run python run_grpo_gym.py \
   same pipeline used in standalone OpenSage evaluation.
 - **vLLM HTTP server**: exposed by NeMo RL with `expose_http_server: true`,
   provides generation with logprob tracking. The agent server creates a
-  `LiteLlm(base_url=vllm_url)` and injects it as `task.model`.
+  `NemoLlm(base_url=vllm_url)` that calls the Responses API directly via aiohttp.
+- **StepTrackingLogger**: wraps NeMo RL's Logger to write the current training
+  step to `jobs/.step`. The agent server reads this to group rollouts by step
+  (`jobs/step_0000/`, `jobs/step_0001/`, ...).
 
 Data format (`prepare_harbor_prompts.py` generates NemoGym-compatible JSONL):
 ```json
 {
   "responses_create_params": {
     "input": [
-      {"role": "developer", "content": "system prompt..."},
+      {"role": "system", "content": "system prompt..."},
       {"role": "user", "content": "instruction from Harbor task"}
     ],
     "tools": [{"name": "run_terminal_command", ...}, ...]
   },
-  "verifier_metadata": {"task_id": "...", "task_dir": "..."}
+  "verifier_metadata": {"task_id": "...", "task_dir": "..."},
+  "agent_ref": {"name": "opensage_agent"}
 }
-```
-
-## Running with Docker
-
-```bash
-docker buildx build --build-context nemo-rl=. \
-  --target release -f docker/Dockerfile \
-  --tag nemo-rl-opensage:latest .
-
-docker run --gpus all --rm -it \
-  --network host --ipc host \
-  -v $PWD:$PWD -w $PWD/research/opensage \
-  nemo-rl-opensage:latest bash
-
-# Inside container
-uv pip install --python /opt/nemo_rl_venv/bin/python \
-  "opensage @ git+https://github.com/opensage-agent/opensage-adk-dev.git"
-python run_grpo_gym.py
 ```
 
 ## Viewing Trajectories
@@ -96,7 +82,9 @@ cd nemotron-rl-viewer && npm install
 npx next dev --port 3000
 ```
 
-Open `http://localhost:3000` and enter the logs directory path.
+Open `http://localhost:3000`. The default logs path points to
+`research/opensage/logs`. Sessions tab shows experiments, steps, and tasks
+with live auto-refresh for in-progress rollouts.
 
 ## Updating Dependencies
 

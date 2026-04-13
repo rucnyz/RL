@@ -304,6 +304,14 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
         )
         return f"http://{model_server_config['host']}:{model_server_config['port']}"
 
+    def _read_current_step(self) -> int:
+        """Read current training step from the step file written by the logger wrapper."""
+        step_file = Path(self.config.jobs_dir) / ".step"
+        try:
+            return int(step_file.read_text().strip())
+        except (FileNotFoundError, ValueError):
+            return 0
+
     async def run(self, body: OpenSageRunRequest) -> OpenSageVerifyResponse:
         async with self.sem:
             global_config_dict = get_global_config_dict()
@@ -327,7 +335,25 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                     user_message = msg.get("content", "")
                     break
 
-            output_dir = str(Path(self.config.jobs_dir) / f"{task_id}_{uuid4().hex[:8]}")
+            step = self._read_current_step()
+            output_dir = str(Path(self.config.jobs_dir) / f"step_{step:04d}" / f"{task_id}_{uuid4().hex[:8]}")
+
+            # Write metadata early so the viewer can show system_prompt/user_message for live sessions
+            system_prompt = next(
+                (m.get("content", "") for m in params_dict.get("input", [])
+                 if isinstance(m, dict) and m.get("role") in ("system", "developer")),
+                "",
+            )
+            output_path = Path(output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+            with open(output_path / "result.json", "w") as f:
+                json.dump({
+                    "task_id": task_id,
+                    "user_message": user_message,
+                    "system_prompt": system_prompt,
+                    "reward": None,
+                    "result": None,
+                }, f, indent=2, default=str)
 
             try:
                 # Run via Ray remote (non-blocking)

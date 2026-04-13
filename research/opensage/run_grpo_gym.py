@@ -39,7 +39,28 @@ from nemo_rl.utils.config import (
     parse_hydra_overrides,
     register_omegaconf_resolvers,
 )
-from nemo_rl.utils.logger import get_next_experiment_dir
+from nemo_rl.utils.logger import Logger, get_next_experiment_dir
+
+
+class StepTrackingLogger(Logger):
+    """Wraps Logger to write the current training step to a file.
+
+    The agent server reads this file to group jobs by step.
+    """
+
+    def __init__(self, cfg, step_file: str):
+        super().__init__(cfg)
+        self._step_file = step_file
+
+    def log_metrics(self, metrics, step, prefix="", **kwargs):
+        super().log_metrics(metrics, step, prefix=prefix, **kwargs)
+        if prefix == "train":
+            try:
+                os.makedirs(os.path.dirname(self._step_file), exist_ok=True)
+                with open(self._step_file, "w") as f:
+                    f.write(str(step))
+            except OSError:
+                pass
 
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
@@ -129,6 +150,15 @@ def main() -> None:
         grpo_state,
         master_config,
     ) = setup(config, tokenizer, train_dataset, val_dataset)
+
+    # Wrap logger to track current training step for agent server
+    jobs_dir = os.path.join(log_dir, "jobs")
+    step_file = os.path.join(jobs_dir, ".step")
+    step_logger = StepTrackingLogger(config["logger"], step_file=step_file)
+    # Copy over the backends already initialized by setup()
+    step_logger.loggers = logger.loggers
+    step_logger.wandb_logger = logger.wandb_logger
+    logger = step_logger
 
     # Inject jobs_dir so session traces go into log_dir/jobs/
     nemo_gym_dict = config["env"]["nemo_gym"]
