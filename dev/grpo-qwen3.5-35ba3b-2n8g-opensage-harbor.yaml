@@ -16,7 +16,7 @@ data:
     data_path: dev/data/harbor_prompts.jsonl
     input_key: prompt
   default:
-    processor: null
+    processor: opensage_data_processor
     env_name: opensage
     prompt_file: null
 
