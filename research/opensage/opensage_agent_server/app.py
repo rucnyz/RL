@@ -116,25 +116,29 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
         # Fallback
         return ""
 
-    def _create_litellm(self, model_name: str = "") -> Any:
-        """Create LiteLlm pointing to NemoGym's vLLM HTTP server."""
-        from google.adk.models.lite_llm import LiteLlm
+    def _create_model(self, model_name: str = "") -> Any:
+        """Create NemoLlm pointing to NemoGym's model server.
+
+        Uses NemoLlm (not plain LiteLlm) to preserve logprob data
+        (prompt_token_ids, generation_token_ids, generation_log_probs)
+        that NemoGym's model server returns.
+        """
+        from opensage.evaluation.rl_adapters.nemo_llm import NemoLlm
 
         # Get the model server URL from NemoGym's server client
         model_server_url = self.server_client.get_server_url(self.config.model_server.name)
-        # vLLM HTTP server exposes OpenAI-compatible API
         api_base = f"{model_server_url}/v1"
 
         model_str = model_name or os.getenv("AGENT_MODEL_NAME", "model")
         if not model_str.startswith("openai/"):
             model_str = f"openai/{model_str}"
 
-        model = LiteLlm(
+        model = NemoLlm(
             model=model_str,
             api_key=os.getenv("OPENAI_API_KEY", "dummy"),
             base_url=api_base,
         )
-        logger.info(f"Created LiteLlm: model={model_str}, base_url={api_base}")
+        logger.info(f"Created NemoLlm: model={model_str}, base_url={api_base}")
         return model
 
     # ---- /v1/responses — not used, but required by base class ----
@@ -177,8 +181,8 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
             )
 
         try:
-            # 1. Create LiteLlm pointing to NemoGym's vLLM
-            litellm_model = self._create_litellm()
+            # 1. Create NemoLlm pointing to NemoGym's model server
+            litellm_model = self._create_model()
 
             # 2. Build sample dict for Evaluation._create_task()
             # Extract user message from the input
