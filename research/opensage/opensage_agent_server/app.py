@@ -429,11 +429,21 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                     update={"input": input_messages}
                 ) if hasattr(body.responses_create_params, 'model_copy') else body.responses_create_params
 
-            # Save result to disk
+            # Save result to disk with full context for viewer
             output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
             with open(output_path / "result.json", "w") as f:
-                json.dump({"reward": reward, "result": result}, f, indent=2, default=str)
+                json.dump({
+                    "reward": reward,
+                    "task_id": task_id,
+                    "user_message": user_message,
+                    "system_prompt": next(
+                        (m.get("content", "") for m in params_dict.get("input", [])
+                         if m.get("role") in ("system", "developer")),
+                        "",
+                    ),
+                    "result": result,
+                }, f, indent=2, default=str)
 
             return OpenSageVerifyResponse(
                 responses_create_params=updated_params,
