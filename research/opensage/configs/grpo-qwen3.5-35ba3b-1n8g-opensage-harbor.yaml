@@ -40,6 +40,7 @@ policy:
 
   generation:
     vllm_cfg:
+      async_engine: true
       tensor_parallel_size: 8
       enforce_eager: true
     colocated:
