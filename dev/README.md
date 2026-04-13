@@ -36,9 +36,9 @@ See the upstream [NeMo RL README](https://github.com/NVIDIA-NeMo/RL#prerequisite
 ```bash
 # Clone this fork
 git clone https://github.com/rucnyz/RL.git && cd RL
-
+git submodule update --init --recursive
 # Create venv
-uv venv
+uv venv --seed
 ```
 
 ### Run training
