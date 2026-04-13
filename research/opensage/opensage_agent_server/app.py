@@ -43,8 +43,6 @@ from nemo_gym.global_config import (
 from nemo_gym.openai_utils import (
     NeMoGymResponse,
     NeMoGymResponseCreateParamsNonStreaming,
-    NeMoGymResponseOutputMessageForTraining,
-    NeMoGymResponseOutputText,
 )
 
 logger = logging.getLogger(__name__)
@@ -163,18 +161,43 @@ async def _run_opensage_job_async(
     result = await evaluation._generate_one(task)
 
     # Collect logprobs from NemoLlm
-    logprob_turns = nemo_llm.get_logprob_turns()
+    logprob_turns = [
+        {
+            "prompt_token_ids": t.prompt_token_ids,
+            "generation_token_ids": t.generation_token_ids,
+            "generation_log_probs": t.generation_log_probs,
+        }
+        for t in nemo_llm.get_logprob_turns()
+    ]
+
+    # Read session trace from disk (written by _generate_one → _export_session_trace)
+    # and convert to NeMo Gym format
+    from opensage.evaluation.rl_adapters.nemo_gym_utils import (
+        events_to_nemo_gym_output,
+        extract_input_from_events,
+        extract_usage_from_events,
+    )
+
+    session_events = []
+    session_trace_path = Path(output_dir) / task_id / "session_trace.json"
+    if session_trace_path.exists():
+        try:
+            import json as _json
+            with open(session_trace_path) as f:
+                session_data = _json.load(f)
+            session_events = session_data.get("events", [])
+        except Exception as e:
+            logger.warning(f"Failed to read session trace: {e}")
+
+    output_items = events_to_nemo_gym_output(session_events, logprob_turns)
+    input_messages = extract_input_from_events(session_events)
+    usage = extract_usage_from_events(session_events)
 
     return {
         "result": result,
-        "logprob_turns": [
-            {
-                "prompt_token_ids": t.prompt_token_ids,
-                "generation_token_ids": t.generation_token_ids,
-                "generation_log_probs": t.generation_log_probs,
-            }
-            for t in logprob_turns
-        ],
+        "output_items": output_items,
+        "input_messages": input_messages,
+        "usage": usage,
     }
 
 
@@ -270,39 +293,29 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                 job_result = await asyncio.to_thread(ray.get, future)
 
                 result = job_result["result"]
-                logprob_turns = job_result["logprob_turns"]
+                output_items = job_result["output_items"]
+                input_messages = job_result["input_messages"]
+                usage = job_result["usage"]
 
                 # Extract reward
                 test_result = result.get("test_result", {})
                 passed = test_result.get("passed", False)
                 reward = 1.0 if passed else 0.0
 
-                # Build output items with logprob data for NeMo RL training
-                output_items = []
-                for turn in logprob_turns:
-                    message = NeMoGymResponseOutputMessageForTraining(
-                        id=f"cht_{uuid4().hex[:12]}",
-                        content=[NeMoGymResponseOutputText(
-                            annotations=[], text="", type="output_text", logprobs=None,
-                        )],
-                        role="assistant",
-                        status="completed",
-                        type="message",
-                        prompt_token_ids=turn["prompt_token_ids"],
-                        generation_token_ids=turn["generation_token_ids"],
-                        generation_log_probs=turn["generation_log_probs"],
-                    )
-                    output_items.append(message.model_dump())
-
                 logger.info(
                     f"Task {task_id}: reward={reward}, passed={passed}, "
-                    f"logprob_turns={len(logprob_turns)}"
+                    f"output_items={len(output_items)}"
                 )
 
             except Exception as e:
                 logger.exception(f"OpenSage agent error for task {task_id}: {e}")
                 result = None
                 output_items = []
+                input_messages = []
+                usage = {"input_tokens": 0, "output_tokens": 0,
+                         "input_tokens_details": {"cached_tokens": 0},
+                         "output_tokens_details": {"reasoning_tokens": 0},
+                         "total_tokens": 0}
                 reward = 0.0
                 passed = False
 
@@ -314,14 +327,15 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                 "model": policy_model_name,
                 "output": output_items,
                 "status": "completed",
-                "usage": {
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "input_tokens_details": {"cached_tokens": 0},
-                    "output_tokens_details": {"reasoning_tokens": 0},
-                    "total_tokens": 0,
-                },
+                "usage": usage,
             }
+
+            # Update responses_create_params with actual input
+            updated_params = body.responses_create_params
+            if input_messages:
+                updated_params = body.responses_create_params.model_copy(
+                    update={"input": input_messages}
+                ) if hasattr(body.responses_create_params, 'model_copy') else body.responses_create_params
 
             # Save result to disk
             output_path = Path(output_dir)
@@ -330,7 +344,7 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                 json.dump({"reward": reward, "result": result}, f, indent=2, default=str)
 
             return OpenSageVerifyResponse(
-                responses_create_params=body.responses_create_params,
+                responses_create_params=updated_params,
                 reward=reward,
                 response=response,
             )
