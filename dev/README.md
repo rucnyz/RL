@@ -74,7 +74,7 @@ uv add "opensage[harbor]" --path /data/yuzhou/projects/opensage-adk-dev --editab
 To switch back to GitHub:
 
 ```bash
-uv add opensage --git https://github.com/opensage-agent/opensage-adk-dev.git
+uv add "opensage[harbor]" --git https://github.com/opensage-agent/opensage-adk-dev.git
 ```
 
 ### Template
