@@ -188,6 +188,9 @@ def main():
                     ],
                     "tools": TOOLS,
                 },
+                "agent_ref": {
+                    "name": "opensage_agent",
+                },
                 "verifier_metadata": {
                     "task_id": task_dir.name,
                     "task_dir": str(task_dir),
