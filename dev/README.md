@@ -53,35 +53,13 @@ uv run --extra mcore --extra opensage python examples/run_grpo.py \
   --config examples/configs/my_config.yaml
 ```
 
-### Example Config
+### Example: Qwen3.5-35B + SWE-bench (Harbor)
 
-```yaml
-env:
-  opensage:
-    tasks_dir: swebench          # auto-downloads from harbor registry
-    max_turns: 30
-    test_timeout: 120
+A ready-to-use config is at [`grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml`](grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml), inheriting from the upstream Qwen3.5-35B recipe with OpenSage + Harbor environment:
 
-data:
-  train:
-    default:
-      env_name: opensage
-      file_path: /path/to/prompts.jsonl
-
-policy:
-  model_name: Qwen/Qwen3-8B
-  dtensor_cfg:
-    enabled: true
-
-generation:
-  backend: vllm
-  vllm:
-    gpu_memory_utilization: 0.7
-
-algorithm:
-  grpo:
-    n_samples_per_prompt: 4
-    kl_coeff: 0.01
+```bash
+uv run --extra vllm --extra opensage python examples/run_grpo.py \
+  --config dev/grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml
 ```
 
 ## Syncing with Upstream
