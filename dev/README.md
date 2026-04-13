@@ -51,8 +51,9 @@ A ready-to-use config is at [
 upstream Qwen3.5-35B recipe with OpenSage + Harbor environment:
 
 ```bash
-# 1. Sync dependencies (installs opensage + vllm)
-uv sync --extra vllm --extra opensage
+# 1. optional install local opensage
+uv add --editable "/data/yuzhou/projects/opensage-adk-dev"
+
 
 # 2. Install harbor CLI separately (subprocess only, avoids dep conflicts)
 pip install "harbor>=0.3.0"
