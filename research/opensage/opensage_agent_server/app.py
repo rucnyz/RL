@@ -133,7 +133,6 @@ def _get_or_create_evaluation(agent_name, tasks_dir, test_timeout, max_llm_calls
     evaluation = benchmark.evaluation_class(
         dataset_path=tasks_dir,
         agent_dir=_resolve_agent_dir(agent_name),
-        agent_id=f"nemo_gym_{uuid4().hex[:8]}",
         max_llm_calls=max_llm_calls,
         test_timeout=test_timeout,
         output_dir=output_dir,
