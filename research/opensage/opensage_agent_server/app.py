@@ -208,17 +208,35 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
             logger.info(f"Running OpenSage agent for task {task_id}")
             result = await self._evaluation._generate_one(task)
 
-            # 5. Extract reward
+            # 5. Extract reward from HarborEvaluation result
             test_result = result.get("test_result", {})
             passed = test_result.get("passed", False)
             reward = 1.0 if passed else 0.0
 
-            logger.info(f"Task {task_id}: reward={reward}, passed={passed}")
+            # 6. Build response with logprob data for NeMo RL training
+            # NemoGym expects response.output to contain items with
+            # prompt_token_ids, generation_token_ids, generation_log_probs
+            output_items = []
+            logprob_turns = litellm_model.get_logprob_turns()
+            for turn in logprob_turns:
+                output_items.append({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": ""}],
+                    "prompt_token_ids": turn.prompt_token_ids,
+                    "generation_token_ids": turn.generation_token_ids,
+                    "generation_log_probs": turn.generation_log_probs,
+                })
+
+            logger.info(
+                f"Task {task_id}: reward={reward}, passed={passed}, "
+                f"logprob_turns={len(logprob_turns)}"
+            )
 
             return OpenSageRunResponse(
                 **body.model_dump(),
                 response=NeMoGymResponse(
-                    output=[],
+                    output=output_items,
                     output_text=json.dumps(result, default=str),
                 ),
                 reward=reward,
