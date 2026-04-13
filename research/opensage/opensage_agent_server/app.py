@@ -365,7 +365,18 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
             except Exception as e:
                 logger.exception(f"OpenSage agent error for task {task_id}: {e}")
                 result = None
-                output_items = []
+                # Return a degenerate output item with dummy token data so NeMo RL
+                # doesn't crash on empty output (it raises ValueError otherwise).
+                # The sample gets reward=0 and minimal gradient contribution.
+                output_items = [{
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "", "annotations": []}],
+                    "prompt_token_ids": [0],
+                    "generation_token_ids": [0],
+                    "generation_log_probs": [0.0],
+                }]
                 input_messages = []
                 usage = None
                 error_flags = {}
