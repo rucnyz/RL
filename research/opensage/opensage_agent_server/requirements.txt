@@ -1,3 +1,4 @@
 -e nemo-gym[dev] @ ../..
-opensage
+-e opensage @ /data/yuzhou/projects/opensage-adk-dev
 docker
+aiohttp
