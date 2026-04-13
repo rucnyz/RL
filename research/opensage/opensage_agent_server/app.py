@@ -328,6 +328,9 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                 "output": output_items,
                 "status": "completed",
                 "usage": usage,
+                "parallel_tool_calls": False,
+                "tool_choice": "auto",
+                "tools": [],
             }
 
             # Update responses_create_params with actual input
