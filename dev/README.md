@@ -51,14 +51,17 @@ A ready-to-use config is at [
 upstream Qwen3.5-35B recipe with OpenSage + Harbor environment:
 
 ```bash
-# 1. Sync dependencies (installs opensage[harbor] + vllm)
+# 1. Sync dependencies (installs opensage + vllm)
 uv sync --extra vllm --extra opensage
 
-# 2. Prepare prompts from Harbor tasks (auto-downloads swebench from registry)
+# 2. Install harbor CLI separately (subprocess only, avoids dep conflicts)
+pip install "harbor>=0.3.0"
+
+# 3. Prepare prompts from Harbor tasks (auto-downloads swebench from registry)
 uv run --extra opensage python dev/prepare_harbor_prompts.py \
   --tasks swebench -o dev/data/harbor_prompts.jsonl
 
-# 3. Run training
+# 4. Run training
 uv run --extra vllm --extra opensage python examples/run_grpo.py \
   --config dev/grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml
 ```
@@ -68,13 +71,13 @@ uv run --extra vllm --extra opensage python examples/run_grpo.py \
 By default, `--extra opensage` installs from GitHub. To switch to a local checkout:
 
 ```bash
-uv add --editable "/data/yuzhou/projects/opensage-adk-dev[harbor]"
+uv add --editable "/data/yuzhou/projects/opensage-adk-dev"
 ```
 
 To switch back to GitHub:
 
 ```bash
-uv add "opensage[harbor]" --git https://github.com/opensage-agent/opensage-adk-dev.git --tag main
+uv add opensage --git https://github.com/opensage-agent/opensage-adk-dev.git
 ```
 
 ### Template
