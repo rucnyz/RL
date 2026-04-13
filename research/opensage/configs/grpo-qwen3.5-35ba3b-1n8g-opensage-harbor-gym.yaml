@@ -1,6 +1,7 @@
 defaults: ../../../examples/nemo_gym/grpo_workplace_assistant_nemotron_nano_v2_9b.yaml
 
 # OpenSage Harbor via NemoGym (1 node, 8 GPUs, Megatron)
+# 4 GPUs training (EP=4) + 4 GPUs generation (TP=4), async GRPO
 #
 # Prepare prompts: uv run python prepare_harbor_prompts.py --tasks swebench-verified -o data/harbor_prompts.jsonl
 # Run:             uv run python run_grpo_gym.py --config configs/grpo-qwen3.5-35ba3b-1n8g-opensage-harbor-gym.yaml
@@ -13,7 +14,12 @@ grpo:
   val_at_start: false
 
   async_grpo:
-    enabled: false
+    enabled: true
+    max_trajectory_age_steps: 1
+    in_flight_weight_updates: true
+
+loss_fn:
+  use_importance_sampling_correction: true
 
 checkpointing:
   checkpoint_dir: results/grpo-qwen3.5-35ba3b-opensage-harbor-gym
@@ -32,7 +38,8 @@ policy:
 
   megatron_cfg:
     enabled: true
-    expert_model_parallel_size: 8
+    tensor_model_parallel_size: 1
+    expert_model_parallel_size: 4
     moe_token_dispatcher_type: allgather
     apply_rope_fusion: false
     activation_checkpointing: true
@@ -46,7 +53,7 @@ policy:
   generation:
     vllm_cfg:
       async_engine: true
-      tensor_parallel_size: 8
+      tensor_parallel_size: 4
       enforce_eager: true
       expose_http_server: true
       skip_tokenizer_init: false
@@ -55,7 +62,10 @@ policy:
         tool_parser: qwen3_xml
 
     colocated:
-      enabled: true
+      enabled: false
+      resources:
+        gpus_per_node: 4
+        num_nodes: 1
 
 data:
   max_input_seq_length: null
@@ -85,6 +95,7 @@ env:
       responses_api_models:
         vllm_model:
           uses_reasoning_parser: false
+          replace_developer_role_with_system: true
           extra_body:
             chat_template_kwargs:
               enable_thinking: false
