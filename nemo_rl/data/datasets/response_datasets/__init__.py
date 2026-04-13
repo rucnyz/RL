@@ -28,6 +28,7 @@ from nemo_rl.data.datasets.response_datasets.geometry3k import Geometry3KDataset
 from nemo_rl.data.datasets.response_datasets.gsm8k import GSM8KDataset
 from nemo_rl.data.datasets.response_datasets.helpsteer3 import HelpSteer3Dataset
 from nemo_rl.data.datasets.response_datasets.nemogym_dataset import NemoGymDataset
+from nemo_rl.data.datasets.response_datasets.opensage_dataset import OpenSageDataset
 from nemo_rl.data.datasets.response_datasets.nemotron_cascade2_sft import (
     NemotronCascade2SFTMathDataset,
 )
@@ -64,6 +65,7 @@ DATASET_REGISTRY = {
     # load from local JSONL file or HuggingFace
     "openai_format": OpenAIFormatDataset,
     "NemoGymDataset": NemoGymDataset,
+    "OpenSageDataset": OpenSageDataset,
     "ResponseDataset": ResponseDataset,
 }
 
@@ -105,6 +107,7 @@ __all__ = [
     "Geometry3KDataset",
     "HelpSteer3Dataset",
     "NemoGymDataset",
+    "OpenSageDataset",
     "NemotronCascade2SFTMathDataset",
     "OasstDataset",
     "OpenAIFormatDataset",

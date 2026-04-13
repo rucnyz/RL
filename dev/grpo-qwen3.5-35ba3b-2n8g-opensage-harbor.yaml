@@ -12,7 +12,7 @@ checkpointing:
 
 data:
   train:
-    dataset_name: ResponseDataset
+    dataset_name: OpenSageDataset
     data_path: dev/data/harbor_prompts.jsonl
     input_key: prompt
   default:
