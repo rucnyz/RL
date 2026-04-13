@@ -59,7 +59,7 @@ A ready-to-use config is at [`grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml`](gr
 
 ```bash
 # 1. Prepare prompts from Harbor tasks (auto-downloads swebench from registry)
-python dev/prepare_harbor_prompts.py --tasks swebench -o /root/harbor_prompts.jsonl
+python dev/prepare_harbor_prompts.py --tasks swebench -o dev/data/harbor_prompts.jsonl
 
 # 2. Run training
 uv run --extra vllm --extra opensage python examples/run_grpo.py \

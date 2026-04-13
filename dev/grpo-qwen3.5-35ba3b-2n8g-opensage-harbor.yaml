@@ -13,7 +13,7 @@ checkpointing:
 data:
   train:
     dataset_name: null
-    data_path: /root/harbor_prompts.jsonl
+    data_path: ./data/harbor_prompts.jsonl
     input_key: prompt
   default:
     processor: null
