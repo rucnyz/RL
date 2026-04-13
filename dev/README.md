@@ -1,12 +1,15 @@
 # Dev: OpenSage Integration
 
-Fork of [NVIDIA-NeMo/RL](https://github.com/NVIDIA-NeMo/RL) with [OpenSage](https://github.com/opensage-agent/opensage-adk) environment support.
+Fork of [NVIDIA-NeMo/RL](https://github.com/NVIDIA-NeMo/RL)
+with [OpenSage](https://github.com/opensage-agent/opensage-adk) environment support.
 
 ## What's Changed
 
-Registered `opensage` environment in `nemo_rl/environments/utils.py`, pointing to `opensage.evaluation.rl_adapters.nemo_rl_env.OpenSageEnvironment`.
+Registered `opensage` environment in `nemo_rl/environments/utils.py`, pointing to
+`opensage.evaluation.rl_adapters.nemo_rl_env.OpenSageEnvironment`.
 
-This enables training agents on any Harbor-format benchmark (SWE-bench, CompileBench, GAIA, etc.) using NeMo RL's training pipeline (GRPO/DPO/DAPO) + OpenSage's Docker sandbox execution.
+This enables training agents on any Harbor-format benchmark (SWE-bench, CompileBench, GAIA, etc.) using NeMo RL's
+training pipeline (GRPO/DPO/DAPO) + OpenSage's Docker sandbox execution.
 
 ## Architecture
 
@@ -41,21 +44,11 @@ git submodule update --init --recursive
 uv venv --seed
 ```
 
-### Run training
-
-```bash
-# GRPO with vLLM backend + OpenSage environment
-uv run --extra vllm --extra opensage python examples/run_grpo.py \
-  --config examples/configs/my_config.yaml
-
-# GRPO with Megatron backend + OpenSage environment
-uv run --extra mcore --extra opensage python examples/run_grpo.py \
-  --config examples/configs/my_config.yaml
-```
-
 ### Example: Qwen3.5-35B + SWE-bench (Harbor)
 
-A ready-to-use config is at [`grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml`](grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml), inheriting from the upstream Qwen3.5-35B recipe with OpenSage + Harbor environment:
+A ready-to-use config is at [
+`grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml`](grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml), inheriting from the
+upstream Qwen3.5-35B recipe with OpenSage + Harbor environment:
 
 ```bash
 # 1. Sync dependencies (installs opensage[harbor] + vllm)
@@ -75,13 +68,25 @@ uv run --extra vllm --extra opensage python examples/run_grpo.py \
 By default, `--extra opensage` installs from GitHub. To switch to a local checkout:
 
 ```bash
-uv add opensage --editable /path/to/opensage-adk-dev
+uv add "opensage[harbor]" --path /data/yuzhou/projects/opensage-adk-dev --editable
 ```
 
 To switch back to GitHub:
 
 ```bash
 uv add opensage --git https://github.com/opensage-agent/opensage-adk-dev.git
+```
+
+### Template
+
+```bash
+# GRPO with vLLM backend + OpenSage environment
+uv run --extra vllm --extra opensage python examples/run_grpo.py \
+  --config examples/configs/my_config.yaml
+
+# GRPO with Megatron backend + OpenSage environment
+uv run --extra mcore --extra opensage python examples/run_grpo.py \
+  --config examples/configs/my_config.yaml
 ```
 
 ## Syncing with Upstream
