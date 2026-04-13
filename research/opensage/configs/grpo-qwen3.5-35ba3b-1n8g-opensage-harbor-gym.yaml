@@ -1,0 +1,101 @@
+defaults: ../../../examples/nemo_gym/grpo_workplace_assistant_nemotron_nano_v2_9b.yaml
+
+# OpenSage Harbor via NemoGym (1 node, 8 GPUs, Megatron)
+#
+# Prepare prompts: uv run python prepare_harbor_prompts.py --tasks swebench-verified -o data/harbor_prompts.jsonl
+# Run:             uv run python run_grpo_gym.py --config configs/grpo-qwen3.5-35ba3b-1n8g-opensage-harbor-gym.yaml
+
+grpo:
+  num_prompts_per_step: 8
+  num_generations_per_prompt: 4
+  max_rollout_turns: 1  # NemoGym controls multi-turn internally
+  skip_reference_policy_logprobs_calculation: true
+
+  async_grpo:
+    enabled: true
+    max_trajectory_age_steps: 1
+    in_flight_weight_updates: true
+
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3.5-35ba3b-opensage-harbor-gym
+
+policy:
+  model_name: Qwen/Qwen3.5-35B-A3B-Base
+  train_global_batch_size: 32
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+  max_total_sequence_length: 4096
+
+  dtensor_cfg:
+    enabled: false
+  optimizer: null
+  scheduler: null
+
+  megatron_cfg:
+    enabled: true
+    expert_model_parallel_size: 8
+    moe_token_dispatcher_type: allgather
+    apply_rope_fusion: false
+    activation_checkpointing: true
+    defer_fp32_logits: true
+
+  sequence_packing:
+    enabled: false
+  dynamic_batching:
+    enabled: true
+
+  generation:
+    vllm_cfg:
+      async_engine: true
+      tensor_parallel_size: 8
+      enforce_eager: true
+      expose_http_server: true
+      skip_tokenizer_init: false
+      http_server_serving_chat_kwargs:
+        enable_auto_tools: true
+        tool_parser: qwen3xml
+
+    colocated:
+      enabled: true
+
+data:
+  max_input_seq_length: null
+  shuffle: true
+  num_workers: 0
+
+  train:
+    data_path: data/harbor_prompts.jsonl
+  validation: null
+  default:
+    dataset_name: NemoGymDataset
+    env_name: nemo_gym
+    prompt_file: null
+    system_prompt_file: null
+    processor: nemo_gym_data_processor
+
+env:
+  should_use_nemo_gym: true
+  should_log_nemo_gym_responses: true
+  nemo_gym:
+    rollout_max_attempts_to_avoid_lp_nan: 1
+    config_paths:
+    - responses_api_models/vllm_model/configs/vllm_model_for_training.yaml
+    - research/opensage/nemo_gym_configs/harbor_opensage.yaml
+    policy_model:
+      responses_api_models:
+        vllm_model:
+          uses_reasoning_parser: false
+          extra_body:
+            chat_template_kwargs:
+              enable_thinking: false
+
+logger:
+  wandb_enabled: true
+  tensorboard_enabled: true
+  wandb:
+    project: opensage-rl
+    name: grpo-qwen3.5-35ba3b-opensage-harbor-gym
+
+cluster:
+  gpus_per_node: 8
+  num_nodes: 1
