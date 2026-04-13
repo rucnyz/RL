@@ -1,0 +1,33 @@
+defaults: ../examples/configs/recipes/llm/grpo-qwen3.5-35ba3b-2n8g-automodel-ep16.yaml
+
+# Override math env with opensage harbor env
+grpo:
+  max_rollout_turns: 30
+  num_prompts_per_step: 8
+  num_generations_per_prompt: 4
+
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3.5-35ba3b-2n8g-opensage-harbor
+
+data:
+  train:
+    dataset_name: null
+    data_path: /root/harbor_prompts.jsonl
+    input_key: prompt
+  default:
+    processor: null
+    env_name: opensage
+    prompt_file: null
+
+env:
+  opensage:
+    tasks_dir: swebench
+    max_turns: 30
+    test_timeout: 120
+
+logger:
+  wandb_enabled: true
+  tensorboard_enabled: true
+  wandb:
+    project: opensage-rl
+    name: grpo-qwen3.5-35ba3b-opensage-harbor
