@@ -183,7 +183,7 @@ def main():
             record = {
                 "responses_create_params": {
                     "input": [
-                        {"role": "developer", "content": SYSTEM_PROMPT},
+                        {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": instruction},
                     ],
                     "tools": TOOLS,
