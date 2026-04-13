@@ -13,12 +13,7 @@ grpo:
   val_at_start: false
 
   async_grpo:
-    enabled: true
-    max_trajectory_age_steps: 1
-    in_flight_weight_updates: true
-
-loss_fn:
-  use_importance_sampling_correction: true
+    enabled: false
 
 checkpointing:
   checkpoint_dir: results/grpo-qwen3.5-35ba3b-opensage-harbor-gym
@@ -60,10 +55,7 @@ policy:
         tool_parser: qwen3_xml
 
     colocated:
-      enabled: false
-      resources:
-        gpus_per_node: 4
-        num_nodes: 1
+      enabled: true
 
 data:
   max_input_seq_length: null
