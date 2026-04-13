@@ -34,63 +34,71 @@ NeMo RL                                     OpenSageEnvironment
 
 ### Prerequisites
 
-See the upstream [NeMo RL README](https://github.com/NVIDIA-NeMo/RL#prerequisites) for full setup, or:
-
 ```bash
 # Clone this fork
 git clone https://github.com/rucnyz/RL.git && cd RL
 git submodule update --init --recursive
-# Create venv
-uv venv --seed
 ```
 
-### Example: Qwen3.5-35B + SWE-bench (Harbor)
+### 1. Build the Docker Container
 
-A ready-to-use config is at [
-`grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml`](grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml), inheriting from the
-upstream Qwen3.5-35B recipe with OpenSage + Harbor environment:
+NeMo RL requires a Docker container to run training. The container pre-caches all worker
+virtual environments (vLLM, automodel, mcore, etc.) during build, so they don't need to be
+compiled at runtime. See [dependency-management.md](../docs/design-docs/dependency-management.md)
+for details.
 
 ```bash
-# 1. optional install local opensage
-uv add --editable "/data/yuzhou/projects/opensage-adk-dev"
+# Build from this fork's source (includes opensage registration)
+docker buildx build --build-context nemo-rl=. \
+  --target release -f docker/Dockerfile \
+  --tag nemo-rl-opensage:latest .
+```
 
+### 2. Prepare Prompts (outside container)
 
-# 2. Install harbor CLI separately (subprocess only, avoids dep conflicts)
+This step is plain file I/O and can run on the host:
+
+```bash
+# Install harbor CLI (subprocess only, avoids dep conflicts)
 pip install "harbor>=0.3.0"
 
-# 3. Prepare prompts from Harbor tasks (auto-downloads swebench-verified from registry)
+# Prepare prompts from Harbor tasks (auto-downloads swebench-verified from registry)
 uv run --extra opensage python dev/prepare_harbor_prompts.py \
-  --tasks  swebench-verified -o dev/data/harbor_prompts.jsonl
+  --tasks swebench-verified -o dev/data/harbor_prompts.jsonl
+```
 
-# 4. Run training
-uv run --extra vllm --extra opensage python examples/run_grpo.py \
+### 3. Run Training (inside container)
+
+```bash
+# Launch container with GPU access, mounting source code
+docker run --gpus all --rm -it \
+  --network host --ipc host \
+  -v $PWD:$PWD -w $PWD \
+  nemo-rl-opensage:latest \
+  bash
+
+# Inside the container: install opensage (not pre-cached in base image)
+uv pip install --python /opt/nemo_rl_venv/bin/python "opensage @ git+https://github.com/opensage-agent/opensage-adk-dev.git"
+
+# Run training
+uv run examples/run_grpo.py \
   --config dev/grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml
 ```
 
 ### Using Local OpenSage (for development)
 
-By default, `--extra opensage` installs from GitHub. To switch to a local checkout:
+Mount your local opensage checkout into the container:
 
 ```bash
-uv add --editable "/data/yuzhou/projects/opensage-adk-dev"
-```
+docker run --gpus all --rm -it \
+  --network host --ipc host \
+  -v $PWD:$PWD -w $PWD \
+  -v /data/yuzhou/projects/opensage-adk-dev:/data/yuzhou/projects/opensage-adk-dev \
+  nemo-rl-opensage:latest \
+  bash
 
-To switch back to GitHub:
-
-```bash
-uv add opensage --git https://github.com/opensage-agent/opensage-adk-dev.git
-```
-
-### Template
-
-```bash
-# GRPO with vLLM backend + OpenSage environment
-uv run --extra vllm --extra opensage python examples/run_grpo.py \
-  --config examples/configs/my_config.yaml
-
-# GRPO with Megatron backend + OpenSage environment
-uv run --extra mcore --extra opensage python examples/run_grpo.py \
-  --config examples/configs/my_config.yaml
+# Inside container: install local opensage in editable mode
+uv pip install --python /opt/nemo_rl_venv/bin/python -e /data/yuzhou/projects/opensage-adk-dev
 ```
 
 ## Syncing with Upstream
