@@ -58,10 +58,14 @@ uv run --extra mcore --extra opensage python examples/run_grpo.py \
 A ready-to-use config is at [`grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml`](grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml), inheriting from the upstream Qwen3.5-35B recipe with OpenSage + Harbor environment:
 
 ```bash
-# 1. Prepare prompts from Harbor tasks (auto-downloads swebench from registry)
-python dev/prepare_harbor_prompts.py --tasks swebench -o dev/data/harbor_prompts.jsonl
+# 1. Sync dependencies (installs opensage[harbor] + vllm)
+uv sync --extra vllm --extra opensage
 
-# 2. Run training
+# 2. Prepare prompts from Harbor tasks (auto-downloads swebench from registry)
+uv run --extra opensage python dev/prepare_harbor_prompts.py \
+  --tasks swebench -o dev/data/harbor_prompts.jsonl
+
+# 3. Run training
 uv run --extra vllm --extra opensage python examples/run_grpo.py \
   --config dev/grpo-qwen3.5-35ba3b-2n8g-opensage-harbor.yaml
 ```
