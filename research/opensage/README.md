@@ -23,18 +23,35 @@ NeMo RL                                     OpenSageEnvironment
 +-------------------------+
 ```
 
-## Quick Start
+## Quick Start (NemoGym mode — recommended)
 
-All commands are run from `research/opensage/`.
+All commands are run from the repo root.
+
+```bash
+# 1. Link OpenSage resources server into NemoGym
+ln -s ../../../../research/opensage/opensage_resources_server \
+  3rdparty/Gym-workspace/Gym/resources_servers/opensage_resources_server
+
+# 2. Prepare NemoGym-format prompts (includes system prompt + tool definitions)
+cd research/opensage
+uv run python prepare_harbor_prompts.py \
+  --tasks swebench-verified -o data/harbor_prompts.jsonl
+
+# 3. Run GRPO training via NemoGym (async per-sample rollouts)
+uv run python run_grpo_gym.py \
+  --config configs/grpo-qwen3.5-35ba3b-1n8g-opensage-harbor-gym.yaml
+```
+
+### Quick Start (manual env mode — legacy)
 
 ```bash
 cd research/opensage
 
-# 1. Prepare prompts from Harbor tasks
+# 1. Prepare prompts
 uv run python prepare_harbor_prompts.py \
   --tasks swebench-verified -o data/harbor_prompts.jsonl
 
-# 2. Run GRPO training (1 node, 8 GPUs, Megatron backend)
+# 2. Run GRPO training (sync rollouts, manual tool parsing)
 uv run python run_grpo.py \
   --config configs/grpo-qwen3.5-35ba3b-1n8g-opensage-harbor.yaml
 ```

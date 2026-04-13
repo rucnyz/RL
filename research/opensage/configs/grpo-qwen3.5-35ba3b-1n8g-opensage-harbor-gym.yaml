@@ -80,7 +80,7 @@ env:
     rollout_max_attempts_to_avoid_lp_nan: 1
     config_paths:
     - responses_api_models/vllm_model/configs/vllm_model_for_training.yaml
-    - research/opensage/nemo_gym_configs/harbor_opensage.yaml
+    - resources_servers/opensage_resources_server/configs/opensage.yaml
     policy_model:
       responses_api_models:
         vllm_model:
