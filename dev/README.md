@@ -72,14 +72,17 @@ uv run --extra vllm --extra opensage python examples/run_grpo.py \
 
 ### Using Local OpenSage (for development)
 
-By default, `--extra opensage` installs from GitHub. To use a local checkout instead, uncomment and edit the source override in `pyproject.toml`:
+By default, `--extra opensage` installs from GitHub. To switch to a local checkout:
 
-```toml
-[tool.uv.sources]
-opensage = { path = "/path/to/opensage-adk-dev", editable = true }
+```bash
+uv add opensage --editable /path/to/opensage-adk-dev
 ```
 
-Then `uv sync --extra opensage` will use the local copy.
+To switch back to GitHub:
+
+```bash
+uv add opensage --git https://github.com/opensage-agent/opensage-adk-dev.git
+```
 
 ## Syncing with Upstream
 
