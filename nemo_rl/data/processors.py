@@ -694,46 +694,6 @@ def nemo_gym_data_processor(
     return output
 
 
-def opensage_data_processor(
-    datum_dict: dict[str, Any],
-    task_data_spec: TaskDataSpec,
-    tokenizer: TokenizerType,
-    max_seq_length: int | None,
-    idx: int,
-) -> DatumSpec:
-    """Process a datum for OpenSage Harbor tasks.
-
-    Expects datum_dict with 'prompt' (instruction text) and optionally
-    'task_id', 'task_dir' fields from prepare_harbor_prompts.py.
-    """
-    prompt = datum_dict.get("prompt", datum_dict.get("input", ""))
-
-    message_log: LLMMessageLogType = get_formatted_message_log(
-        prompt_text=prompt,
-        system_prompt=task_data_spec.system_prompt,
-        tokenizer=tokenizer,
-    )
-
-    length = sum(len(m.get("token_ids", [])) for m in message_log)
-    loss_multiplier = 1.0 if length < (max_seq_length or float("inf")) else 0.0
-
-    extra_env_info: dict[str, Any] = {
-        "task_id": datum_dict.get("task_id", f"task_{idx}"),
-        "task_dir": datum_dict.get("task_dir", ""),
-    }
-
-    output: DatumSpec = {
-        "message_log": message_log,
-        "length": length,
-        "extra_env_info": extra_env_info,
-        "loss_multiplier": loss_multiplier,
-        "idx": idx,
-    }
-    if "task_name" in datum_dict:
-        output["task_name"] = datum_dict["task_name"]
-    return output
-
-
 # Processor registry. Key is the processor name, value is the processor function.
 # Note: We cast the literal dict to Dict[str, TaskDataProcessFnCallable] because
 # type checkers see each concrete function's signature as a distinct callable type.
@@ -751,7 +711,6 @@ PROCESSOR_REGISTRY: Dict[str, TaskDataProcessFnCallable] = cast(
         "sft_processor": sft_processor,
         "vlm_hf_data_processor": vlm_hf_data_processor,
         "nemo_gym_data_processor": nemo_gym_data_processor,
-        "opensage_data_processor": opensage_data_processor,
     },
 )
 

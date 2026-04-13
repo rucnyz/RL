@@ -53,9 +53,6 @@ ENV_REGISTRY: Dict[str, EnvRegistryEntry] = {
     "nemo_gym": {
         "actor_class_fqn": "nemo_rl.environments.nemo_gym.NemoGym",
     },
-    "opensage": {
-        "actor_class_fqn": "opensage.evaluation.rl_adapters.nemo_rl_env.OpenSageEnvironment",
-    },
 }
 
 

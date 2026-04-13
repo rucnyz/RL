@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "opensage-rl"
+version = "0.1.0"
+description = "OpenSage Harbor environment integration for NeMo RL"
+readme = "README.md"
+requires-python = ">=3.13.13"
+dependencies = [
+    "nemo-rl",
+    "opensage",
+]
+
+[dependency-groups]
+test = ["pytest>=7.0.0", "pytest-timeout", "pytest-cov"]
+
+[tool.uv.sources]
+nemo-rl = { workspace = true }
+opensage = { path = "../../../opensage-adk-dev", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["opensage_rl"]
+
+[tool.pytest.ini_options]
+addopts = "--durations=15 -s -rA -x"
+testpaths = ["tests"]
+python_files = "test_*.py"
