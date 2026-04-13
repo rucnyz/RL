@@ -68,7 +68,7 @@ uv run --extra vllm --extra opensage python examples/run_grpo.py \
 By default, `--extra opensage` installs from GitHub. To switch to a local checkout:
 
 ```bash
-uv add "opensage[harbor]" --path /data/yuzhou/projects/opensage-adk-dev --editable
+uv add "opensage[harbor]" --editable /data/yuzhou/projects/opensage-adk-dev
 ```
 
 To switch back to GitHub:
