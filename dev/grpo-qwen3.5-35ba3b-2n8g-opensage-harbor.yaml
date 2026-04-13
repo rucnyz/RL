@@ -1,6 +1,7 @@
 defaults: ../examples/configs/recipes/llm/grpo-qwen3.5-35ba3b-2n8g-automodel-ep16.yaml
 
 # Override math env with opensage harbor env
+# Prepare prompts first: python dev/prepare_harbor_prompts.py --tasks swebench -o /root/harbor_prompts.jsonl
 grpo:
   max_rollout_turns: 30
   num_prompts_per_step: 8
