@@ -319,18 +319,44 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                 reward = 0.0
                 passed = False
 
-            # Build response (same pattern as harbor_agent)
+            # Build response (same as harbor_agent's get_default_response_object)
+            responses_create_params = body.responses_create_params
+            if hasattr(responses_create_params, 'model_dump'):
+                params_dict = responses_create_params.model_dump(exclude_unset=True, exclude_none=True)
+            else:
+                params_dict = dict(responses_create_params) if responses_create_params else {}
+
             response = {
                 "id": f"resp_{uuid4().hex}",
                 "created_at": int(time.time()),
+                "error": None,
+                "incomplete_details": None,
+                "instructions": None,
+                "metadata": {},
                 "object": "response",
-                "model": policy_model_name,
-                "output": output_items,
-                "status": "completed",
-                "usage": usage,
                 "parallel_tool_calls": False,
                 "tool_choice": "auto",
                 "tools": [],
+                "background": False,
+                "max_output_tokens": None,
+                "max_tool_calls": None,
+                "previous_response_id": None,
+                "prompt": None,
+                "reasoning": {"effort": None, "generate_summary": None, "summary": None},
+                "service_tier": "default",
+                "status": "completed",
+                "text": {"format": {"type": "text"}, "verbosity": "medium"},
+                "top_logprobs": 0,
+                "truncation": "disabled",
+                "user": None,
+                "prompt_cache_key": None,
+                "safety_identifier": None,
+                "store": True,
+                "model": policy_model_name,
+                "temperature": params_dict.get("temperature"),
+                "top_p": params_dict.get("top_p"),
+                "output": output_items,
+                "usage": usage,
             }
 
             # Update responses_create_params with actual input
