@@ -77,6 +77,10 @@ class OpenSageRunRequest(BaseRunRequest):
 
 class OpenSageVerifyResponse(BaseVerifyResponse):
     model_config = ConfigDict(extra="allow")
+    metadata: Optional[Dict[str, Any]] = None
+    context_length_exceeded_error: int = 0
+    memory_limit_exceeded_error: int = 0
+    agent_timeout_error: int = 0
 
 
 # ============================================================
@@ -85,6 +89,9 @@ class OpenSageVerifyResponse(BaseVerifyResponse):
 
 
 _RAY_WORKER_EVENT_LOOP: Optional[asyncio.AbstractEventLoop] = None
+# Cache HarborEvaluation per Ray worker process (avoid recreating per request)
+_CACHED_EVALUATION = None
+_CACHED_EVAL_KEY = None
 
 
 def _run_opensage_job_sync(
@@ -112,6 +119,30 @@ def _run_opensage_job_sync(
     )
 
 
+def _get_or_create_evaluation(agent_name, tasks_dir, test_timeout, max_llm_calls, output_dir):
+    """Cache HarborEvaluation per Ray worker process."""
+    global _CACHED_EVALUATION, _CACHED_EVAL_KEY
+    key = (agent_name, tasks_dir, test_timeout, max_llm_calls)
+    if _CACHED_EVALUATION is not None and _CACHED_EVAL_KEY == key:
+        # Update output_dir for this request (may differ per task)
+        _CACHED_EVALUATION.output_dir = output_dir
+        return _CACHED_EVALUATION
+
+    from opensage.evaluation.rl_adapters.benchmark_interface import BenchmarkInterface
+    benchmark = BenchmarkInterface.load("harbor")
+    evaluation = benchmark.evaluation_class(
+        dataset_path=tasks_dir,
+        agent_dir=_resolve_agent_dir(agent_name),
+        agent_id=f"nemo_gym_{uuid4().hex[:8]}",
+        max_llm_calls=max_llm_calls,
+        test_timeout=test_timeout,
+        output_dir=output_dir,
+    )
+    _CACHED_EVALUATION = evaluation
+    _CACHED_EVAL_KEY = key
+    return evaluation
+
+
 async def _run_opensage_job_async(
     agent_name: str,
     tasks_dir: str,
@@ -124,8 +155,7 @@ async def _run_opensage_job_async(
     api_base: str,
     output_dir: str,
 ) -> dict:
-    """Run OpenSage _generate_one() and return result + logprobs."""
-    from opensage.evaluation.rl_adapters.benchmark_interface import BenchmarkInterface
+    """Run OpenSage _generate_one() and return result + logprobs + error flags."""
     from opensage.evaluation.rl_adapters.nemo_llm import NemoLlm
 
     # Create NemoLlm pointing to NemoGym's model server
@@ -136,15 +166,9 @@ async def _run_opensage_job_async(
         base_url=api_base,
     )
 
-    # Load HarborEvaluation
-    benchmark = BenchmarkInterface.load("harbor")
-    evaluation = benchmark.evaluation_class(
-        dataset_path=tasks_dir,
-        agent_dir=_resolve_agent_dir(agent_name),
-        agent_id=f"nemo_gym_{uuid4().hex[:8]}",
-        max_llm_calls=max_llm_calls,
-        test_timeout=test_timeout,
-        output_dir=output_dir,
+    # Get or create cached HarborEvaluation
+    evaluation = _get_or_create_evaluation(
+        agent_name, tasks_dir, test_timeout, max_llm_calls, output_dir,
     )
 
     # Build task
@@ -157,8 +181,40 @@ async def _run_opensage_job_async(
     task = evaluation._create_task(sample_dict)
     task.model = nemo_llm
 
-    # Run full OpenSage agent loop
-    result = await evaluation._generate_one(task)
+    # Run full OpenSage agent loop with error tracking
+    error_flags = {
+        "context_length_exceeded": False,
+        "memory_limit_exceeded": False,
+        "agent_timeout": False,
+    }
+    result = None
+
+    try:
+        result = await evaluation._generate_one(task)
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+        logger.warning(f"Task {task_id} failed: {error_type}: {error_msg}")
+
+        # Detect error types
+        if "context length" in error_msg.lower() or "max_tokens" in error_msg.lower():
+            error_flags["context_length_exceeded"] = True
+        elif "memory" in error_msg.lower() or "OOM" in error_msg:
+            error_flags["memory_limit_exceeded"] = True
+        elif "timeout" in error_type.lower() or "timeout" in error_msg.lower():
+            error_flags["agent_timeout"] = True
+
+        # Try to recover partial result from disk
+        result_path = Path(output_dir) / task_id / "result.json"
+        if result_path.exists():
+            try:
+                with open(result_path) as f:
+                    result = json.load(f)
+            except Exception:
+                pass
+
+        if result is None:
+            result = {"test_result": {"passed": False, "output": f"{error_type}: {error_msg}"}}
 
     # Collect logprobs from NemoLlm
     logprob_turns = [
@@ -170,8 +226,7 @@ async def _run_opensage_job_async(
         for t in nemo_llm.get_logprob_turns()
     ]
 
-    # Read session trace from disk (written by _generate_one → _export_session_trace)
-    # and convert to NeMo Gym format
+    # Read session trace from disk and convert to NeMo Gym format
     from opensage.evaluation.rl_adapters.nemo_gym_utils import (
         events_to_nemo_gym_output,
         extract_input_from_events,
@@ -182,9 +237,8 @@ async def _run_opensage_job_async(
     session_trace_path = Path(output_dir) / task_id / "session_trace.json"
     if session_trace_path.exists():
         try:
-            import json as _json
             with open(session_trace_path) as f:
-                session_data = _json.load(f)
+                session_data = json.load(f)
             session_events = session_data.get("events", [])
         except Exception as e:
             logger.warning(f"Failed to read session trace: {e}")
@@ -198,6 +252,7 @@ async def _run_opensage_job_async(
         "output_items": output_items,
         "input_messages": input_messages,
         "usage": usage,
+        "error_flags": error_flags,
     }
 
 
@@ -296,9 +351,10 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                 output_items = job_result["output_items"]
                 input_messages = job_result["input_messages"]
                 usage = job_result["usage"]
+                error_flags = job_result.get("error_flags", {})
 
                 # Extract reward
-                test_result = result.get("test_result", {})
+                test_result = (result or {}).get("test_result", {})
                 passed = test_result.get("passed", False)
                 reward = 1.0 if passed else 0.0
 
@@ -312,12 +368,9 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                 result = None
                 output_items = []
                 input_messages = []
-                usage = {"input_tokens": 0, "output_tokens": 0,
-                         "input_tokens_details": {"cached_tokens": 0},
-                         "output_tokens_details": {"reasoning_tokens": 0},
-                         "total_tokens": 0}
+                usage = None
+                error_flags = {}
                 reward = 0.0
-                passed = False
 
             # Build response (same as harbor_agent's get_default_response_object)
             responses_create_params = body.responses_create_params
@@ -376,6 +429,10 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                 responses_create_params=updated_params,
                 reward=reward,
                 response=response,
+                metadata=result if result else {},
+                context_length_exceeded_error=int(error_flags.get("context_length_exceeded", False)),
+                memory_limit_exceeded_error=int(error_flags.get("memory_limit_exceeded", False)),
+                agent_timeout_error=int(error_flags.get("agent_timeout", False)),
             )
 
 
