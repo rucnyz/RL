@@ -130,11 +130,17 @@ def main() -> None:
         master_config,
     ) = setup(config, tokenizer, train_dataset, val_dataset)
 
+    # Inject jobs_dir so session traces go into log_dir/jobs/
+    nemo_gym_dict = config["env"]["nemo_gym"]
+    if "opensage_agent" not in nemo_gym_dict:
+        nemo_gym_dict["opensage_agent"] = {"responses_api_agents": {"opensage_agent_server": {}}}
+    nemo_gym_dict["opensage_agent"].setdefault("responses_api_agents", {}).setdefault("opensage_agent_server", {})["jobs_dir"] = os.path.join(log_dir, "jobs")
+
     # Setup NemoGym environment
     nemo_gym_config = NemoGymConfig(
         model_name=policy_generation.cfg["model_name"],
         base_urls=policy_generation.dp_openai_server_base_urls,
-        initial_global_config_dict=config["env"]["nemo_gym"],
+        initial_global_config_dict=nemo_gym_dict,
     )
     nemo_gym = create_env(env_name="nemo_gym", env_config=nemo_gym_config)
     ray.get(nemo_gym.health_check.remote())
