@@ -59,7 +59,7 @@ pip install "harbor>=0.3.0"
 
 # 3. Prepare prompts from Harbor tasks (auto-downloads swebench from registry)
 uv run --extra opensage python dev/prepare_harbor_prompts.py \
-  --tasks swebench -o dev/data/harbor_prompts.jsonl
+  --tasks  swebench-verified -o dev/data/harbor_prompts.jsonl
 
 # 4. Run training
 uv run --extra vllm --extra opensage python examples/run_grpo.py \

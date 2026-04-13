@@ -22,7 +22,7 @@ data:
 
 env:
   opensage:
-    tasks_dir: swebench
+    tasks_dir: swebench-verified
     max_turns: 30
     test_timeout: 120
 
