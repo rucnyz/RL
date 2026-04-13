@@ -1,9 +1,9 @@
 # NemoGym config for OpenSage agent server
-# This replaces both the agent and resources server — OpenSage handles everything
 opensage_agent:
   responses_api_agents:
     opensage_agent_server:
       entrypoint: app.py
+      concurrency: 32
       model_server:
         type: responses_api_models
         name: policy_model
@@ -11,7 +11,4 @@ opensage_agent:
       test_timeout: 120
       agent_name: harbor_agent
       max_llm_calls: 200
-      datasets:
-      - name: harbor_train
-        type: train
-        jsonl_fpath: research/opensage/data/harbor_prompts.jsonl
+      jobs_dir: jobs
