@@ -10,6 +10,7 @@ grpo:
   num_generations_per_prompt: 4
   max_rollout_turns: 1  # NemoGym controls multi-turn internally
   skip_reference_policy_logprobs_calculation: true
+  val_at_start: false
 
   async_grpo:
     enabled: true
@@ -65,7 +66,8 @@ data:
 
   train:
     data_path: data/harbor_prompts.jsonl
-  validation: null
+  validation:
+    data_path: data/harbor_val.jsonl
   default:
     dataset_name: NemoGymDataset
     env_name: nemo_gym
