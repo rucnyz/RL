@@ -17,6 +17,9 @@ grpo:
     max_trajectory_age_steps: 1
     in_flight_weight_updates: true
 
+loss_fn:
+  use_importance_sampling_correction: true
+
 checkpointing:
   checkpoint_dir: results/grpo-qwen3.5-35ba3b-opensage-harbor-gym
 
