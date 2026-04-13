@@ -82,7 +82,7 @@ env:
     rollout_max_attempts_to_avoid_lp_nan: 1
     config_paths:
     - responses_api_models/vllm_model/configs/vllm_model_for_training.yaml
-    - resources_servers/opensage_resources_server/configs/opensage.yaml
+    - responses_api_agents/opensage_agent_server/configs/opensage.yaml
     policy_model:
       responses_api_models:
         vllm_model:

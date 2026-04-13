@@ -35,9 +35,9 @@ NeMo RL (vLLM generate) → OpenSageEnvironment (manual tool parse + Docker exec
 ## Quick Start (NemoGym mode)
 
 ```bash
-# 1. Link OpenSage resources server into NemoGym (one-time setup)
-ln -s ../../../../research/opensage/opensage_resources_server \
-  3rdparty/Gym-workspace/Gym/resources_servers/opensage_resources_server
+# 1. Link OpenSage agent server into NemoGym (one-time setup)
+ln -s ../../../../research/opensage/opensage_agent_server \
+  3rdparty/Gym-workspace/Gym/responses_api_agents/opensage_agent_server
 
 # 2. Prepare data (from repo root or research/opensage/)
 cd research/opensage
