@@ -63,6 +63,13 @@ class OpenSageAgentConfig(BaseResponsesAPIAgentConfig):
     max_llm_calls: int = 200
     # Output directory for results/trajectories
     jobs_dir: str = "jobs"
+    # OpenSage history config overrides (injected into session.config at runtime,
+    # so we don't have to fork opensage's harbor_agent/config.toml for RL tuning)
+    max_history_summary_length: Optional[int] = None
+    max_tool_response_length: Optional[int] = None
+    # If trajectory token count exceeds this, return degenerate sample (reward=0)
+    # to give the model a learning signal instead of letting NeMo RL drop it silently.
+    max_trajectory_tokens: Optional[int] = None
 
 
 # ============================================================
@@ -105,6 +112,7 @@ def _run_opensage_job_sync(
     model_name: str,
     api_base: str,
     output_dir: str,
+    history_overrides: Dict[str, Any],
 ) -> dict:
     """Run a single OpenSage task synchronously (for Ray remote)."""
     global _RAY_WORKER_EVENT_LOOP
@@ -115,14 +123,89 @@ def _run_opensage_job_sync(
         _run_opensage_job_async(
             agent_name, tasks_dir, test_timeout, max_llm_calls,
             task_id, task_dir, user_message, model_name, api_base, output_dir,
+            history_overrides,
         )
     )
 
 
-def _get_or_create_evaluation(agent_name, tasks_dir, test_timeout, max_llm_calls, output_dir):
+def _trajectory_total_tokens(output_items: list) -> int:
+    """Total tokens NeMo RL would see for this trajectory.
+
+    NeMo RL's contiguity check requires each item's prompt_token_ids to extend
+    the prior. The full trajectory length = last item's prompt_token_ids +
+    its generation_token_ids.
+    """
+    for item in reversed(output_items):
+        if not isinstance(item, dict):
+            continue
+        if "generation_token_ids" not in item:
+            continue
+        prompt = item.get("prompt_token_ids") or []
+        gen = item.get("generation_token_ids") or []
+        return len(prompt) + len(gen)
+    return 0
+
+
+def _make_degenerate_output_items() -> list:
+    """Single dummy output item; NeMo RL needs >=1 item with token ids."""
+    return [{
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "", "annotations": []}],
+        "prompt_token_ids": [0],
+        "generation_token_ids": [0],
+        "generation_log_probs": [0.0],
+    }]
+
+
+def _make_config_patching_evaluation_class(base_cls, history_overrides: Dict[str, Any]):
+    """Build a subclass of HarborEvaluation that patches session.config after creation.
+
+    This lets us control compaction budgets etc. from the RL side without forking
+    opensage's harbor_agent/config.toml.
+
+    Notably we disable history_summarizer_plugin: NeMo RL's trajectory collector
+    requires each turn's prompt_token_ids to be a contiguous extension of the
+    previous turn (seen + tool_response). Compaction REPLACES old events with a
+    summary, breaking that contiguity, so the trajectory gets dropped at the
+    contiguity check. Tool response truncation (tool_response_summarizer_plugin)
+    is fine — it shortens individual tool outputs before they're added to history.
+    """
+
+    class _RLHarborEvaluation(base_cls):
+        def _register_opensage_session(self, task):
+            super()._register_opensage_session(task)
+            session = getattr(task, "opensage_session", None)
+            if session is None or session.config is None:
+                return
+
+            # Disable history_summarizer_plugin (breaks trajectory contiguity for RL)
+            plugins_cfg = getattr(session.config, "plugins", None)
+            if plugins_cfg is not None and getattr(plugins_cfg, "enabled", None):
+                plugins_cfg.enabled = [
+                    p for p in plugins_cfg.enabled if p != "history_summarizer_plugin"
+                ]
+
+            history = getattr(session.config, "history", None)
+            if history is None:
+                return
+            if history_overrides.get("max_tool_response_length") is not None:
+                history.max_tool_response_length = history_overrides["max_tool_response_length"]
+            if history_overrides.get("max_history_summary_length") is not None:
+                comp = getattr(history, "events_compaction", None)
+                if comp is not None:
+                    comp.max_history_summary_length = history_overrides["max_history_summary_length"]
+
+    return _RLHarborEvaluation
+
+
+def _get_or_create_evaluation(
+    agent_name, tasks_dir, test_timeout, max_llm_calls, output_dir, history_overrides,
+):
     """Cache HarborEvaluation per Ray worker process."""
     global _CACHED_EVALUATION, _CACHED_EVAL_KEY
-    key = (agent_name, tasks_dir, test_timeout, max_llm_calls)
+    key = (agent_name, tasks_dir, test_timeout, max_llm_calls, tuple(sorted(history_overrides.items())))
     if _CACHED_EVALUATION is not None and _CACHED_EVAL_KEY == key:
         # Update output_dir for this request (may differ per task)
         _CACHED_EVALUATION.output_dir = output_dir
@@ -130,12 +213,16 @@ def _get_or_create_evaluation(agent_name, tasks_dir, test_timeout, max_llm_calls
 
     from opensage.evaluation.rl_adapters.benchmark_interface import BenchmarkInterface
     benchmark = BenchmarkInterface.load("harbor")
-    evaluation = benchmark.evaluation_class(
+    eval_cls = benchmark.evaluation_class
+    if any(v is not None for v in history_overrides.values()):
+        eval_cls = _make_config_patching_evaluation_class(eval_cls, history_overrides)
+    evaluation = eval_cls(
         dataset_path=tasks_dir,
         agent_dir=_resolve_agent_dir(agent_name),
         max_llm_calls=max_llm_calls,
         test_timeout=test_timeout,
         output_dir=output_dir,
+        non_interactive=True,
     )
     _CACHED_EVALUATION = evaluation
     _CACHED_EVAL_KEY = key
@@ -153,6 +240,7 @@ async def _run_opensage_job_async(
     model_name: str,
     api_base: str,
     output_dir: str,
+    history_overrides: Dict[str, Any],
 ) -> dict:
     """Run OpenSage _generate_one() and return result + logprobs + error flags."""
     from opensage.evaluation.rl_adapters.nemo_llm import NemoLlm
@@ -168,6 +256,7 @@ async def _run_opensage_job_async(
     # Get or create cached HarborEvaluation
     evaluation = _get_or_create_evaluation(
         agent_name, tasks_dir, test_timeout, max_llm_calls, output_dir,
+        history_overrides,
     )
 
     # Build task
@@ -338,7 +427,9 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
             step = self._read_current_step()
             output_dir = str(Path(self.config.jobs_dir) / f"step_{step:04d}" / f"{task_id}_{uuid4().hex[:8]}")
 
-            # Write metadata early so the viewer can show system_prompt/user_message for live sessions
+            # Write metadata early so the viewer can show system_prompt/user_message for live sessions.
+            # OpenSage's HarborEvaluation is constructed with non_interactive=True so it skips the
+            # "output_dir already exists, continue?" prompt.
             system_prompt = next(
                 (m.get("content", "") for m in params_dict.get("input", [])
                  if isinstance(m, dict) and m.get("role") in ("system", "developer")),
@@ -368,6 +459,10 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                     model_name=policy_model_name,
                     api_base=base_url,
                     output_dir=output_dir,
+                    history_overrides={
+                        "max_history_summary_length": self.config.max_history_summary_length,
+                        "max_tool_response_length": self.config.max_tool_response_length,
+                    },
                 )
                 future = runner_ray_remote.remote(_run_opensage_job_sync, params)
                 job_result = await asyncio.to_thread(ray.get, future)
@@ -383,6 +478,22 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                 passed = test_result.get("passed", False)
                 reward = 1.0 if passed else 0.0
 
+                # Trajectory-too-long check: NeMo RL's logprob call concatenates
+                # all turns; if total > vLLM's max_seq_len it fails and the
+                # sample is silently dropped. Replace with a degenerate sample
+                # (reward=0) so the model still gets a learning signal.
+                if self.config.max_trajectory_tokens is not None and output_items:
+                    total_tokens = _trajectory_total_tokens(output_items)
+                    if total_tokens > self.config.max_trajectory_tokens:
+                        logger.warning(
+                            f"Task {task_id}: trajectory {total_tokens} tokens > "
+                            f"max_trajectory_tokens {self.config.max_trajectory_tokens}; "
+                            f"replacing with degenerate sample (reward=0)"
+                        )
+                        output_items = _make_degenerate_output_items()
+                        reward = 0.0
+                        error_flags["context_length_exceeded"] = True
+
                 logger.info(
                     f"Task {task_id}: reward={reward}, passed={passed}, "
                     f"output_items={len(output_items)}"
@@ -394,15 +505,7 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                 # Return a degenerate output item with dummy token data so NeMo RL
                 # doesn't crash on empty output (it raises ValueError otherwise).
                 # The sample gets reward=0 and minimal gradient contribution.
-                output_items = [{
-                    "type": "message",
-                    "role": "assistant",
-                    "status": "completed",
-                    "content": [{"type": "output_text", "text": "", "annotations": []}],
-                    "prompt_token_ids": [0],
-                    "generation_token_ids": [0],
-                    "generation_log_probs": [0.0],
-                }]
+                output_items = _make_degenerate_output_items()
                 input_messages = []
                 usage = None
                 error_flags = {}

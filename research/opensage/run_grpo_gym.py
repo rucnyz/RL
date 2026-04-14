@@ -91,7 +91,9 @@ def main() -> None:
     print("Applied CLI overrides")
 
     config["logger"]["log_dir"] = get_next_experiment_dir(config["logger"]["log_dir"])
-    log_dir = config["logger"]["log_dir"]
+    # Convert to absolute path so agent server (different cwd) resolves jobs_dir correctly
+    log_dir = os.path.abspath(config["logger"]["log_dir"])
+    config["logger"]["log_dir"] = log_dir
     os.makedirs(log_dir, exist_ok=True)
     print(f"Using log directory: {log_dir}")
 

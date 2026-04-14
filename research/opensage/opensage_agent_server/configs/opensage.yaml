@@ -3,7 +3,9 @@ opensage_agent:
   responses_api_agents:
     opensage_agent_server:
       entrypoint: app.py
-      concurrency: 32
+      # Max concurrent tasks. High concurrency can overload vLLM queue → NemoLlm timeouts.
+      # 16 balances throughput vs queue depth. Each agent averages ~5 in-flight LLM requests.
+      concurrency: 16
       model_server:
         type: responses_api_models
         name: policy_model
@@ -12,3 +14,16 @@ opensage_agent:
       agent_name: harbor_agent
       max_llm_calls: 200
       jobs_dir: jobs
+      # Override opensage HistoryConfig at session creation time. The agent
+      # server also disables history_summarizer_plugin (compaction breaks
+      # NeMo RL's trajectory contiguity), so max_history_summary_length is
+      # only kept as a safety net. max_tool_response_length still matters —
+      # it truncates individual tool outputs before they're added to history.
+      max_history_summary_length: 60000
+      max_tool_response_length: 10000
+      # If the final trajectory's tokens (last item's prompt_token_ids +
+      # generation_token_ids) exceeds this, return a degenerate sample with
+      # reward=0 instead of letting NeMo RL's downstream logprob call fail
+      # silently (which drops the trajectory with no learning signal).
+      # Set just below max_total_sequence_length (60000) to leave headroom.
+      max_trajectory_tokens: 58000

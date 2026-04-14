@@ -25,11 +25,11 @@ checkpointing:
   checkpoint_dir: results/grpo-qwen3.5-35ba3b-opensage-harbor-gym
 
 policy:
-  model_name: Qwen/Qwen3.5-35B-A3B-Base
+  model_name: Qwen/Qwen3.5-35B-A3B
   train_global_batch_size: 32
   train_micro_batch_size: 1
   logprob_batch_size: 1
-  max_total_sequence_length: 16384
+  max_total_sequence_length: 60000
 
   dtensor_cfg:
     enabled: false
