@@ -70,6 +70,11 @@ class OpenSageAgentConfig(BaseResponsesAPIAgentConfig):
     # If trajectory token count exceeds this, return degenerate sample (reward=0)
     # to give the model a learning signal instead of letting NeMo RL drop it silently.
     max_trajectory_tokens: Optional[int] = None
+    # Pre-check inside NemoLlm: when the running prompt+gen total reaches this,
+    # yield a synthetic finish_task instead of calling vLLM (which would reject
+    # the over-context request and trigger retry storms). Set below
+    # max_total_sequence_length minus per-turn growth headroom.
+    max_prompt_tokens: Optional[int] = None
     # Override the summarize model. Default "inherit" makes the summarizer share
     # our NemoLlm, which pollutes trajectory token state with non-training LLM
     # calls. Route to a different provider (e.g. anthropic/claude-sonnet-4-6)
@@ -266,6 +271,7 @@ async def _run_opensage_job_async(
         model=model_str,
         api_key=os.getenv("OPENAI_API_KEY", "dummy"),
         base_url=api_base,
+        max_prompt_tokens=history_overrides.get("max_prompt_tokens"),
     )
 
     # Get or create cached HarborEvaluation
@@ -491,6 +497,7 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                         "max_history_summary_length": self.config.max_history_summary_length,
                         "max_tool_response_length": self.config.max_tool_response_length,
                         "summarize_model": self.config.summarize_model,
+                        "max_prompt_tokens": self.config.max_prompt_tokens,
                     },
                 )
                 future = runner_ray_remote.remote(_run_opensage_job_sync, params)

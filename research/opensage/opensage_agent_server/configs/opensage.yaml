@@ -23,10 +23,16 @@ opensage_agent:
       max_tool_response_length: 10000
       # If the final trajectory's tokens (last item's prompt_token_ids +
       # generation_token_ids) exceeds this, return a degenerate sample with
-      # reward=0 instead of letting NeMo RL's downstream logprob call fail
-      # silently (which drops the trajectory with no learning signal).
-      # Set just below max_total_sequence_length (60000) to leave headroom.
-      max_trajectory_tokens: 58000
+      # reward=0 (final safety net for cases the pre-check below misses).
+      max_trajectory_tokens: 55000
+      # NemoLlm pre-check threshold: stop the agent gracefully (synthetic
+      # finish_task) when cumulative prompt+gen reaches this. Without it the
+      # agent keeps growing history past max_total_sequence_length (60000),
+      # vLLM rejects the over-context request, and the agent + NemoGym retry
+      # loops hammer it until max_llm_calls. Set with margin for the next
+      # turn's tool response (~3300 tokens at max_tool_response_length=10000)
+      # plus chat template overhead.
+      max_prompt_tokens: 55000
       # Route tool-response summarization to a non-training LLM (Claude via
       # LiteLlm). By default opensage uses "inherit" which points at our
       # NemoLlm, polluting the trajectory's token state with summarizer calls
