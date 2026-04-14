@@ -70,6 +70,11 @@ class OpenSageAgentConfig(BaseResponsesAPIAgentConfig):
     # If trajectory token count exceeds this, return degenerate sample (reward=0)
     # to give the model a learning signal instead of letting NeMo RL drop it silently.
     max_trajectory_tokens: Optional[int] = None
+    # Override the summarize model. Default "inherit" makes the summarizer share
+    # our NemoLlm, which pollutes trajectory token state with non-training LLM
+    # calls. Route to a different provider (e.g. anthropic/claude-sonnet-4-6)
+    # so summarization stays completely separate from the policy being trained.
+    summarize_model: Optional[str] = None
 
 
 # ============================================================
@@ -186,6 +191,16 @@ def _make_config_patching_evaluation_class(base_cls, history_overrides: Dict[str
                 plugins_cfg.enabled = [
                     p for p in plugins_cfg.enabled if p != "history_summarizer_plugin"
                 ]
+
+            # Route tool-response summarization to a separate model (e.g. Claude)
+            # so it doesn't share NemoLlm's token state with the policy being trained.
+            summarize_model = history_overrides.get("summarize_model")
+            if summarize_model:
+                llm_cfg = getattr(session.config, "llm", None)
+                if llm_cfg is not None and getattr(llm_cfg, "model_configs", None) is not None:
+                    summarize_cfg = llm_cfg.model_configs.get("summarize")
+                    if summarize_cfg is not None:
+                        summarize_cfg.model_name = summarize_model
 
             history = getattr(session.config, "history", None)
             if history is None:
@@ -357,7 +372,20 @@ def _resolve_agent_dir(agent_name: str) -> str:
 
 @ray.remote(
     scheduling_strategy="SPREAD",
-    runtime_env={"py_executable": sys.executable},
+    runtime_env={
+        "py_executable": sys.executable,
+        # Propagate LLM provider keys so summarizer's LiteLlm can reach external
+        # APIs (e.g. Anthropic) from Ray worker processes.
+        "env_vars": {
+            k: v for k, v in {
+                "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY"),
+                "ANTHROPIC_BASE_URL": os.getenv("ANTHROPIC_BASE_URL"),
+                "ANTHROPIC_API_BASE": os.getenv("ANTHROPIC_API_BASE"),
+                "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),
+            }.items()
+            if v is not None
+        },
+    },
 )
 def runner_ray_remote(runner: Callable, params: dict[str, Any]) -> Any:
     return runner(**params)
@@ -462,6 +490,7 @@ class OpenSageAgentServer(SimpleResponsesAPIAgent):
                     history_overrides={
                         "max_history_summary_length": self.config.max_history_summary_length,
                         "max_tool_response_length": self.config.max_tool_response_length,
+                        "summarize_model": self.config.summarize_model,
                     },
                 )
                 future = runner_ray_remote.remote(_run_opensage_job_sync, params)

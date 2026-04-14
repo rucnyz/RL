@@ -27,3 +27,8 @@ opensage_agent:
       # silently (which drops the trajectory with no learning signal).
       # Set just below max_total_sequence_length (60000) to leave headroom.
       max_trajectory_tokens: 58000
+      # Route tool-response summarization to a non-training LLM (Claude via
+      # LiteLlm). By default opensage uses "inherit" which points at our
+      # NemoLlm, polluting the trajectory's token state with summarizer calls
+      # → breaks NeMo RL's contiguity check. Requires ANTHROPIC_API_KEY env.
+      summarize_model: anthropic/claude-sonnet-4-6
