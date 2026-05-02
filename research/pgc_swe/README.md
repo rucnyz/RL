@@ -33,7 +33,8 @@ research/pgc_swe/
 │   ├── data_utils.py
 │   └── worker_extension.py
 └── configs/
-    ├── grpo-qwen3.5-9b-1n8g-swe.yaml              # OUR recipe (1n8g, Qwen3.5-9B, SWE)
+    ├── grpo-qwen3.5-9b-1n8g-swe.yaml              # recipe A: real SWE-bench via OpenHands + Apptainer
+    ├── grpo-qwen3.5-9b-1n8g-harbor-e2b.yaml       # recipe B: harbor terminal tasks via E2B (default)
     └── reference/                                 # untouched upstream files for diffing
         ├── grpo-qwen3.5-9b-1n8g-megatron.yaml     # NeMo RL main: Qwen3.5-9B math (4k ctx)
         ├── grpo-nemotron-nano-16n8g-async-1off-swe.yaml  # NeMo RL super-v3: Nemotron + SWE (16 nodes)
@@ -41,12 +42,30 @@ research/pgc_swe/
         └── harbor_agent.yaml                      # NeMo Gym: harbor terminal agent (RL-aware, alt option)
 ```
 
-## What our recipe combines
+## Two recipes — pick one
+
+| | A. `grpo-qwen3.5-9b-1n8g-swe.yaml` | B. `grpo-qwen3.5-9b-1n8g-harbor-e2b.yaml` ★ default |
+|---|---|---|
+| Dataset | SWE-Gym + SWE-bench Verified | `nvidia/Nemotron-Terminal-Synthetic-Tasks` (6 skill subsets) |
+| Agent | NeMo Gym `swe_agents` (OpenHands CodexAgent / OpenCodeAgent / CodeActAgent) | NeMo Gym `harbor_agent` (Terminus-2 via NemoGymLLM) |
+| Sandbox | Apptainer/Singularity (`.sif` files locally) | E2B cloud (uses `E2B_API_KEY`) |
+| Setup cost | Pull ~100 `.sif` images (100-300 GB local disk) + install Apptainer | Just set `E2B_API_KEY`; templates auto-build on first use |
+| Long horizon? | ✅ multi-turn, real repos | ✅ multi-turn shell tasks |
+| "Real" SWE-bench? | ✅ yes | ❌ synthetic terminal tasks |
+
+We default to **B** because the user has E2B Pro credits and the PGC paper's
+"long-horizon agentic gradient instability" claim doesn't require real
+SWE-bench specifically — synthetic terminal tasks exhibit the same dynamics.
+
+## What our recipes combine
+
+Both recipes share the same training stack; only the agent / sandbox differs.
 
 | Layer            | Source                                           | Notes |
 |------------------|--------------------------------------------------|-------|
 | Training stack   | `grpo-qwen3.5-9b-1n8g-megatron.yaml`             | Qwen3.5-9B + Megatron + 1 node |
-| SWE agent        | `swebench_openhands_training.yaml`               | OpenHands CodexAgent / OpenCodeAgent / CodeActAgent variants |
+| SWE agent (A)    | `swebench_openhands_training.yaml`               | OpenHands CodexAgent / OpenCodeAgent / CodeActAgent variants |
+| Harbor agent (B) | `harbor_agent.yaml`                              | Terminus-2 + harbor's pluggable env (we override `harbor_environment_type=e2b`) |
 | Async loop       | `grpo-nemotron-nano-16n8g-async-1off-swe.yaml`   | async_grpo + in-flight weight updates |
 | Loss             | `grpo-nemotron-nano-16n8g-async-1off-swe.yaml`   | DAPO clip 0.2/0.28 + token-level + TIS |
 | Token capture    | NeMo Gym responses_api / NemoGymLLM              | `collect_rollout_details=True` (the bit rllm was missing) |
@@ -86,6 +105,33 @@ dense:
 
 ## Smoke test
 
+### Recipe B — harbor + E2B (default)
+
+```bash
+# 1. one-time: download + unpack one subset of the dataset
+hf download nvidia/Nemotron-Terminal-Synthetic-Tasks --repo-type dataset \
+  --local-dir 3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks
+tar -xzf 3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks/skill_based/mixed/scientific_computing.tar.gz \
+  -C 3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks/skill_based/mixed/
+
+# 2. apply the upstream patch documented in harbor_agent README §"Required patches to Gym"
+#    (add "chat_template_kwargs" to the tokenize endpoint in
+#     3rdparty/Gym-workspace/Gym/responses_api_models/vllm_model/app.py)
+
+# 3. set E2B_API_KEY in env
+export E2B_API_KEY=...
+
+# 4. run
+python examples/nemo_gym/run_grpo_nemo_gym.py \
+    --config research/pgc_swe/configs/grpo-qwen3.5-9b-1n8g-harbor-e2b.yaml \
+    data.train.data_path=$DATA_DIR/scientific_train.jsonl \
+    data.validation.data_path=$DATA_DIR/scientific_val.jsonl
+```
+
+Expects `Tasks: 1/1` then training step logs in W&B (`nemo-rl/grpo-qwen3.5-9b-1n8g-harbor-e2b`).
+
+### Recipe A — real SWE-bench via Apptainer
+
 ```bash
 python examples/nemo_gym/run_grpo_nemo_gym.py \
     --config research/pgc_swe/configs/grpo-qwen3.5-9b-1n8g-swe.yaml \
@@ -94,7 +140,7 @@ python examples/nemo_gym/run_grpo_nemo_gym.py \
     env.nemo_gym.swe_agents_train.responses_api_agents.swe_agents.container_formatter=/path/to/swebench/{instance_id}.sif
 ```
 
-Expects `Tasks: 1/1` then training step logs in W&B (`nemo-rl/grpo-qwen3.5-9b-1n8g-swe`).
+Same trainer, just swap config — output goes to `nemo-rl/grpo-qwen3.5-9b-1n8g-swe`.
 
 ## TODO (PGC integration)
 
