@@ -8,6 +8,11 @@
 .venv
 venv
 venvs
+
+# Per-project secrets — never commit
+.env
+.env.*
+!.env.example
 __pycache__/
 _build/
 build/
