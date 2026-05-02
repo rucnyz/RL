@@ -1,0 +1,368 @@
+# GRPO RL on harbor terminal-style synthetic tasks (Nemotron-Terminal-Synthetic-Tasks)
+# with Qwen3.5-9B-Base on 1 node × 8 GPUs, using E2B as the sandbox backend.
+#
+# Lineage:
+#   - Same training stack as `grpo-qwen3.5-9b-1n8g-swe.yaml` (Qwen3.5 + Megatron +
+#     1 node + async GRPO + DAPO loss).
+#   - Different env: switches the agent loop from NeMo Gym swe_agents (OpenHands +
+#     Apptainer-only) to NeMo Gym harbor_agent (Terminus-2 + pluggable env
+#     including E2B).
+#   - Data: HuggingFace `nvidia/Nemotron-Terminal-Synthetic-Tasks` (6 skill_based
+#     subsets: data_processing / data_science / debugging / file_operations /
+#     scientific_computing / security). Each task ships its own Dockerfile; E2B
+#     builds a template per task on first use.
+#
+# Why this exists alongside the SWE recipe:
+#   - swe_agents path is locked to Apptainer (NVIDIA HPC default) — can't use E2B.
+#   - User has E2B Pro credits already; we want to leverage them.
+#   - Real SWE-bench is not a hard requirement for the PGC paper; long-horizon
+#     agentic terminal tasks exhibit the same gradient-instability dynamics.
+#
+# Required upstream patch (see harbor_agent README §"Required patches to Gym"):
+#   In `3rdparty/Gym-workspace/Gym/responses_api_models/vllm_model/app.py`,
+#   add "chat_template_kwargs" to the tokenize body keys list. Without this,
+#   multi-turn token contiguity breaks. Apply manually before first run.
+#
+# Run:
+#   # Pre-build E2B templates for the chosen subset (see README; mirrors the
+#   # rllm-side `prepare_e2b_templates.py` we wrote earlier, since harbor
+#   # itself races on first-rollout build).
+#   python research/pgc_swe/prepare_harbor_e2b_templates.py \
+#       --tasks-root 3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks/skill_based/mixed/scientific_computing
+#
+#   python examples/nemo_gym/run_grpo_nemo_gym.py \
+#       --config research/pgc_swe/configs/grpo-qwen3.5-9b-1n8g-harbor-e2b.yaml \
+#       data.train.data_path=$DATA_DIR/scientific_train.jsonl \
+#       data.validation.data_path=$DATA_DIR/scientific_val.jsonl
+
+defaults: ../../../examples/configs/grpo_math_1B.yaml
+
+checkpointing:
+  enabled: true
+  checkpoint_dir: results/grpo-qwen3.5-9b-1n8g-harbor-e2b
+  metric_name: val:total_reward/mean
+  higher_is_better: true
+  keep_top_k: 5
+  save_period: 5
+  checkpoint_must_save_by: null
+  model_save_format: safetensors
+  save_consolidated: false
+
+grpo:
+  num_prompts_per_step: 1
+  num_generations_per_prompt: 8
+  num_val_generations_per_prompt: 1
+  max_rollout_turns: 1
+  max_num_epochs: 1
+  max_num_steps: 5  # smoke test default
+  normalize_rewards: true
+  use_leave_one_out_baseline: true
+  advantage_clip_low: -100
+  advantage_clip_high: 100
+  val_period: 100
+  val_at_start: false
+  val_at_end: false
+  overlong_filtering: true
+  max_val_samples: null
+  val_batch_size: 32
+  seed: 42
+  invalid_tool_call_strategy: ""
+
+  use_dynamic_sampling: false
+  dynamic_sampling_max_gen_batches: 10
+  batch_multiplier: 1
+
+  penalize_invalid_tool_call: true
+  invalid_tool_call_advantage: -5.0
+  penalize_malformed_thinking: false  # Qwen3.5 base is not a reasoning model
+  malformed_thinking_advantage: -5.0
+
+  reward_shaping:
+    enabled: false
+    overlong_buffer_length: 128
+    overlong_buffer_penalty: 1
+    max_response_length: ${policy.max_total_sequence_length}
+    stop_properly_penalty_coef: null
+  reward_scaling:
+    enabled: false
+    source_min: 0.0
+    source_max: 1.0
+    target_min: 0.0
+    target_max: 1.0
+
+  async_grpo:
+    enabled: true
+    max_trajectory_age_steps: 1
+    in_flight_weight_updates: true
+    recompute_kv_cache_after_weight_updates: false
+
+  seq_logprob_error_threshold: 2
+
+loss_fn:
+  reference_policy_kl_penalty: 0.0
+  reference_policy_kl_type: k3
+  kl_input_clamp_value: null
+  kl_output_clamp_value: null
+
+  ratio_clip_min: 0.2
+  ratio_clip_max: 0.28
+  ratio_clip_c: null
+  use_on_policy_kl_approximation: true
+  use_importance_sampling_correction: true
+  truncated_importance_sampling_ratio: 5.0
+  truncated_importance_sampling_ratio_min: null
+  truncated_importance_sampling_type: tis
+  sequence_level_importance_ratios: false
+  token_level_loss: true
+  force_on_policy_ratio: true
+  use_kl_in_reward: false
+
+policy:
+  model_name: Qwen/Qwen3.5-9B-Base
+  tokenizer:
+    name: ${policy.model_name}
+    chat_template_kwargs: null
+  hf_config_overrides: {}
+  train_global_batch_size: ${mul:${grpo.num_prompts_per_step}, ${grpo.num_generations_per_prompt}}
+  train_micro_batch_size: 1
+  generation_batch_size: 8
+  logprob_batch_size: 1
+  # Harbor terminal tasks are typically shorter than full SWE-bench (no repo
+  # checkout, no test running). 32k is plenty for most multi-turn shell traces.
+  # Bump to 50k+ if you find traces hitting the cap.
+  max_total_sequence_length: 32768
+  precision: bfloat16
+  logprob_chunk_size: 2048
+  offload_optimizer_for_logprob: false
+
+  dtensor_cfg:
+    _v2: true
+    enabled: false
+    cpu_offload: False
+    sequence_parallel: false
+    activation_checkpointing: false
+    tensor_parallel_size: 1
+    context_parallel_size: 1
+    custom_parallel_plan: null
+
+  megatron_cfg:
+    enabled: true
+    empty_unused_memory_level: 1
+    activation_checkpointing: true
+    tensor_model_parallel_size: 4
+    expert_tensor_parallel_size: 1
+    expert_model_parallel_size: 1  # dense
+    pipeline_model_parallel_size: 1
+    num_layers_in_first_pipeline_stage: null
+    num_layers_in_last_pipeline_stage: null
+    context_parallel_size: 1
+    pipeline_dtype: ${policy.precision}
+    sequence_parallel: true
+    freeze_moe_router: true
+    moe_router_dtype: fp32
+    moe_router_load_balancing_type: none
+    moe_router_bias_update_rate: 0.0
+    moe_permute_fusion: true
+    moe_enable_deepep: false
+    moe_token_dispatcher_type: alltoall
+    moe_aux_loss_coeff: 0.0
+    moe_router_enable_expert_bias: false
+    moe_shared_expert_overlap: false
+    apply_rope_fusion: true
+    bias_activation_fusion: false
+    defer_fp32_logits: true
+    moe_per_layer_logging: false
+
+    mtp_loss_scaling_factor: 0.0
+    mtp_use_repeated_layer: false
+    mtp_num_layers: 0
+    mtp_detach_heads: true
+
+    optimizer:
+      optimizer: adam
+      lr: 1.0e-6
+      min_lr: 1.0e-6
+      weight_decay: 0.0
+      bf16: true
+      fp16: false
+      params_dtype: float32
+
+      adam_beta1: 0.9
+      adam_beta2: 0.999
+      adam_eps: 1e-8
+      sgd_momentum: 0.9
+
+      use_distributed_optimizer: true
+      use_precision_aware_optimizer: true
+      clip_grad: ${policy.max_grad_norm}
+
+      optimizer_cpu_offload: false
+      optimizer_offload_fraction: 0.0
+
+    scheduler:
+      start_weight_decay: ${policy.megatron_cfg.optimizer.weight_decay}
+      end_weight_decay: ${policy.megatron_cfg.optimizer.weight_decay}
+      weight_decay_incr_style: constant
+      lr_decay_style: constant
+      lr_decay_iters: null
+      lr_warmup_iters: 5
+      lr_warmup_init: 3e-7
+
+    distributed_data_parallel_config:
+      grad_reduce_in_fp32: false
+      overlap_grad_reduce: true
+      overlap_param_gather: true
+      use_custom_fsdp: false
+      data_parallel_sharding_strategy: optim_grads_params
+
+    fp8_cfg:
+      enabled: false
+      fp8: e4m3
+      fp8_recipe: blockwise
+      fp8_param: false
+
+    env_vars: null
+
+  dynamic_batching:
+    enabled: false
+    train_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.train_micro_batch_size}}
+    logprob_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.logprob_batch_size}}
+    sequence_length_round: 64
+
+  sequence_packing:
+    enabled: true
+    train_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.train_micro_batch_size}}
+    logprob_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.logprob_batch_size}}
+    algorithm: modified_first_fit_decreasing
+    sequence_length_round: 64
+
+  make_sequence_length_divisible_by: 8
+  max_grad_norm: 1.0
+
+  optimizer: null
+  scheduler: null
+
+  generation:
+    port_range_low: 11001
+    port_range_high: 15000
+    backend: vllm
+    max_new_tokens: ${policy.max_total_sequence_length}
+    temperature: 1.0
+    top_p: 1.0
+    top_k: null
+    stop_token_ids: null
+    stop_strings: null
+    vllm_cfg:
+      enable_prefix_caching: true
+      async_engine: true
+      precision: ${policy.precision}
+      kv_cache_dtype: auto
+      tensor_parallel_size: 4
+      pipeline_parallel_size: 1
+      expert_parallel_size: 1
+      gpu_memory_utilization: 0.6
+      max_model_len: ${policy.max_total_sequence_length}
+      enforce_eager: false
+      use_deep_gemm: false
+      num_last_layers_in_bf16: 0
+      num_first_layers_in_bf16: 0
+      enable_vllm_metrics_logger: true
+      vllm_metrics_logger_interval: 0.5
+      expose_http_server: true
+      skip_tokenizer_init: false
+      enable_thinking: false
+      http_server_serving_chat_kwargs:
+        enable_auto_tools: true
+        tool_parser: qwen3_coder
+
+    vllm_kwargs:
+      compilation_config:
+        cudagraph_capture_sizes: [1, 2, 4, 8, 16]
+    colocated:
+      enabled: true
+      resources:
+        gpus_per_node: null
+        num_nodes: null
+
+data:
+  max_input_seq_length: null
+  shuffle: true
+  num_workers: 1
+  train:
+    # Generated from the harbor task list — each line is:
+    #   {"instance_id": "<dataset_alias>::<task_name>", ...}
+    # See research/pgc_swe/scripts/prep_harbor_jsonl.py (TODO).
+    data_path: ???
+  validation:
+    data_path: ???
+  default:
+    dataset_name: NemoGymDataset
+    env_name: nemo_gym
+    prompt_file: null
+    system_prompt_file: null
+    processor: nemo_gym_data_processor
+
+env:
+  should_use_nemo_gym: true
+  should_log_nemo_gym_responses: false
+  nemo_gym:
+    skip_venv_if_present: true
+    port_range_low: 15001
+    port_range_high: 20000
+    config_paths:
+      - responses_api_models/vllm_model/configs/vllm_model_for_training.yaml
+      - responses_api_agents/harbor_agent/configs/harbor_agent.yaml
+    # Override defaults from harbor_agent.yaml: switch the env from custom
+    # Singularity to vanilla harbor E2B (which is fully supported by the
+    # `harbor` library), and clear the import_path so harbor's EnvironmentFactory
+    # uses harbor_environment_type="e2b".
+    harbor_agent:
+      responses_api_agents:
+        harbor_agent:
+          harbor_environment_type: e2b
+          harbor_environment_import_path: null
+          harbor_environment_kwargs: {}
+          # The bundled scientific_computing subset; swap to one of the other 5
+          # subsets (data_processing / data_science / debugging / file_operations
+          # / security) by tarring + setting local_dataset_path to that folder.
+          harbor_datasets:
+            scientific:
+              local_dataset_path: "responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks/skill_based/mixed/scientific_computing"
+              workdir: "/app"
+          # 200 turns matches super-v3 / harbor README recommendation.
+          harbor_agent_kwargs:
+            max_turns: 200
+            interleaved_thinking: false  # base model
+            enable_summarize: false
+            collect_rollout_details: true   # ★ critical: per-token IDs/logprobs
+            trajectory_config:
+              raw_content: true
+            model_info:
+              max_input_tokens: ${policy.max_total_sequence_length}
+              max_output_tokens: ${policy.max_total_sequence_length}
+              input_cost_per_token: 0.0
+              output_cost_per_token: 0.0
+    use_absolute_ip: true
+
+logger:
+  log_dir: logs/grpo-qwen3.5-9b-1n8g-harbor-e2b
+  num_val_samples_to_print: 0
+  wandb_enabled: true
+  wandb:
+    project: nemo-rl
+    name: grpo-qwen3.5-9b-1n8g-harbor-e2b
+  tensorboard_enabled: true
+  tensorboard: {}
+  mlflow_enabled: false
+  mlflow:
+    experiment_name: grpo-qwen3.5-9b-harbor-e2b
+    run_name: grpo-qwen3.5-9b-harbor-e2b
+  swanlab_enabled: false
+  monitor_gpus: true
+  gpu_monitoring:
+    collection_interval: 10
+    flush_interval: 10
+
+cluster:
+  gpus_per_node: 8
+  num_nodes: 1
