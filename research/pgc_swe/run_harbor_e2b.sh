@@ -149,7 +149,14 @@ if [ ! -d "${HARBOR_AGENT_DIR}/.venv" ]; then
     # litellm dep resolve cleanly.
     NEMORL_RAY_VERSION=$("${REPO_ROOT}/.venv/bin/python" -c \
         "import ray; print(ray.__version__)")
-    (cd "${HARBOR_AGENT_DIR}" && uv venv --python 3.13 .venv && \
+    # Match the main NeMo RL venv's exact Python build (.python-version
+    # pins 3.13.11). Bare `--python 3.13` lets uv pick whatever 3.13.x is
+    # latest in its cache, which causes the harbor_agent Ray actor to
+    # connect to the trainer's Ray cluster and fail with
+    # `RuntimeError: Version mismatch: Python 3.13.11 vs 3.13.12`.
+    NEMORL_PY=$("${REPO_ROOT}/.venv/bin/python" -c \
+        "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')")
+    (cd "${HARBOR_AGENT_DIR}" && uv venv --python "${NEMORL_PY}" .venv && \
         VIRTUAL_ENV=.venv uv pip install \
             -r "${HARBOR_REQS}" \
             --override "${HARBOR_OVERRIDES}" \
