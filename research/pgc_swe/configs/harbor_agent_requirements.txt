@@ -32,4 +32,10 @@
 # Latest harbor (5e21c0b, 2026-04-30 main HEAD as of this writing).
 # Includes the `Template(file_context_path=...)` fix from PR #1397
 # (74c71f5) that we previously had to monkey-patch in run_harbor_e2b.sh.
-harbor @ git+https://github.com/laude-institute/harbor.git@5e21c0b5ba33417aefbae9b34623b1b166da898e
+#
+# `[e2b]` extra pulls `e2b>=2.4.2` + `dockerfile-parse`. Without it
+# `harbor.environments.e2b` raises `MissingExtraError` at first
+# `_create_template`, and our `prepare_e2b_templates.py` fails immediately
+# at `from e2b import AsyncTemplate, ...`. harbor 0.6.x split this out into
+# an extra so users without the e2b backend don't pull the SDK.
+harbor[e2b] @ git+https://github.com/laude-institute/harbor.git@5e21c0b5ba33417aefbae9b34623b1b166da898e

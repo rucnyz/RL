@@ -179,13 +179,26 @@ if [ "${DO_JSONL}" = "true" ]; then
 fi
 
 # 3. prebuild templates across all roots in one pass (the prebuild script
-#    accepts multiple --tasks-root args)
+#    accepts multiple --tasks-root args).
+#
+# Uses the harbor_agent venv's python (not the main NeMo RL .venv): the
+# prebuild script imports `from e2b import AsyncTemplate, ...` which only
+# lives in harbor's `[e2b]` extra. The main .venv has nemo-rl + nemo_gym
+# but neither pulls e2b, so calling the script from there fails with
+# `ModuleNotFoundError: No module named 'e2b'`.
+HARBOR_AGENT_DIR="${REPO_ROOT}/3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent"
+HARBOR_PYTHON="${HARBOR_AGENT_DIR}/.venv/bin/python"
 if [ "${DO_PREBUILD}" = "true" ]; then
+    if [ ! -x "${HARBOR_PYTHON}" ]; then
+        echo "ERROR: harbor_agent venv not built yet — run the launcher once" >&2
+        echo "       to populate ${HARBOR_AGENT_DIR}/.venv, then re-run this." >&2
+        exit 2
+    fi
     prebuild_args=(--tasks-root "${ROOTS[@]}" --concurrency "${PREBUILD_CONCURRENCY}")
     if [ -n "${PREBUILD_LIMIT}" ]; then
         prebuild_args+=(--limit "${PREBUILD_LIMIT}")
     fi
-    "${PYTHON}" "${SCRIPT_DIR}/prepare_e2b_templates.py" "${prebuild_args[@]}"
+    "${HARBOR_PYTHON}" "${SCRIPT_DIR}/prepare_e2b_templates.py" "${prebuild_args[@]}"
 fi
 
 set +x
