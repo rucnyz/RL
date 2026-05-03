@@ -29,13 +29,36 @@
 # `responses_api_agents/harbor_agent/requirements.txt` uses.
 -e ../..[dev]
 
-# Latest harbor (5e21c0b, 2026-04-30 main HEAD as of this writing).
-# Includes the `Template(file_context_path=...)` fix from PR #1397
-# (74c71f5) that we previously had to monkey-patch in run_harbor_e2b.sh.
+# Pin to harbor 9dddd79 (2025-08-04). NOT latest — see below.
 #
-# `[e2b]` extra pulls `e2b>=2.4.2` + `dockerfile-parse`. Without it
-# `harbor.environments.e2b` raises `MissingExtraError` at first
-# `_create_template`, and our `prepare_e2b_templates.py` fails immediately
-# at `from e2b import AsyncTemplate, ...`. harbor 0.6.x split this out into
-# an extra so users without the e2b backend don't pull the SDK.
-harbor[e2b] @ git+https://github.com/laude-institute/harbor.git@5e21c0b5ba33417aefbae9b34623b1b166da898e
+# Why not latest (5e21c0b, 2026-04-30):
+#   harbor 0.6.x landed 466 commits over 9 months that touched mostly
+#   features/adapters we don't use (TensorLake/Modal/Singularity/GKE
+#   environments, codex/gemini-cli/opencode agents, ABC-Bench/AA-LCR
+#   adapters, ATIF trace export, Windows tasks). The two architectural
+#   refactors that *do* affect us are breaking changes nemo-gym 0.3.0rc0
+#   has not adapted to:
+#     * PR #1285: collapsed LocalDatasetConfig + RegistryDatasetConfig
+#       into a single DatasetConfig. nemo-gym imports the old names
+#       from the concrete module path → ImportError on every /run.
+#     * PR #1235: removed OrchestratorConfig (replaced by inline
+#       JobConfig fields + TrialQueue abstraction). nemo-gym still
+#       constructs an OrchestratorConfig instance → ImportError.
+#   Plus a separate `RuntimeError: Set changed size during iteration`
+#   we hit during E2B sandbox bookkeeping. Living with the breakage by
+#   maintaining a growing pile of compat shims wasn't worth it.
+#
+# What we lose vs latest:
+#   For our specific stack (Terminus-2 agent + E2B environment +
+#   nemotron scientific_computing dataset), basically nothing. The only
+#   feature we wanted from a newer harbor was PR #1397's
+#   `Template(file_context_path=...)` fix (so E2B template builds use
+#   the per-task `environment/` dir instead of harbor's install dir).
+#   That's a one-symbol monkey-patch, applied at venv-build time by
+#   research/pgc_swe/scripts/patch_harbor_for_nemo_gym.py.
+#
+# NB: 9dddd79 keeps `e2b>=2.4.2` as a HARD dependency in `[project]`, so
+# the bare `harbor` install is enough — no `[e2b]` extra needed (the extras
+# split happened later in 0.6.x). Trying `harbor[e2b]` against 9dddd79
+# fails resolution with "no such extra".
+harbor @ git+https://github.com/laude-institute/harbor.git@9dddd797b57ab8a0f9d6352a20fce73abbb29573
