@@ -64,7 +64,21 @@ export TORCH_CUDA_ARCH_LIST="9.0 10.0"
 # include/cccl. deep_gemm and similar build-from-source kernels include
 # <cuda/std/...> directly and fail at compile if cccl/ isn't on the include
 # path. Mirror PR #2332's Dockerfile env var.
-export CPLUS_INCLUDE_PATH=/usr/local/cuda/include/cccl${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}
+#
+# We also add the per-worker venv's nccl include path: TE rev 71bbefbf has
+# a build bug where `transformer_engine/common/util/logging.h:15`
+# unconditionally `#include "nccl.h"`, but the CMakeLists only adds the
+# nccl include path when `NVTE_WITH_CUBLASMP=ON` (which we don't enable).
+# On a docker base image with cuda + nccl bundled this works because nccl.h
+# lives in /usr/local/cuda/include; on bare metal CUDA 13.2 nccl ships only
+# as a Python wheel under nvidia/nccl/include. Push that path into CPATH so
+# both gcc (host) and nvcc (device) compilations see it. CPATH is plain
+# additional include search; harmless if the dir doesn't exist on a
+# platform without nvidia-nccl-cu13 installed.
+MCORE_VENV="${REPO_ROOT}/venvs/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker"
+NCCL_INC="${MCORE_VENV}/lib/python3.13/site-packages/nvidia/nccl/include"
+export CPATH="${NCCL_INC}:/usr/local/cuda/include/cccl${CPATH:+:${CPATH}}"
+export CPLUS_INCLUDE_PATH="${NCCL_INC}:/usr/local/cuda/include/cccl${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}"
 
 # Note: `PYTORCH_ALLOC_CONF=expandable_segments:True` would help fragmentation
 # during the Megatron→vLLM refit all_gather, but it crashed vLLM's NCCL init
