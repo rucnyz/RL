@@ -207,15 +207,31 @@ swe-bench, an in-house adapter, etc.:
    server-side forever, so this is a one-time cost per dataset (~20-30 min
    for 1000 tasks; subsequent shared layers cache).
 
-   **Recovery for "zombie" aliases**: if `RateLimitException` interrupts a
-   build mid-flight (E2B's 20-concurrent-build org cap), the alias can end
-   up registered server-side with a `default` tag pointing at a never-
-   finalized `build_id`. Both `alias_exists` and `get_tags` then
-   incorrectly report it as healthy, but every `sandbox.create()` 404s
-   with `tag 'default' does not exist for template ...`. Re-running
-   `prepare_e2b_templates.py` skips them as "CACHED". Run
-   `repair_broken_templates.py` against the affected tasks to force a
-   `skip_cache=True` rebuild that overwrites the zombie state.
+   **Zombie `waiting` builds**: if `AsyncTemplate.build()` is interrupted
+   between alias-registration and image-publish (RateLimit, network blip,
+   KeyboardInterrupt), the alias is left in `buildStatus = "waiting"`
+   server-side. These count against E2B's **20-concurrent-build org cap**
+   forever — every retry that 429s registers another zombie before the 429
+   fires, so retries actively make the cap WORSE. `alias_exists` and
+   `get_tags` report them as healthy (the alias exists, the `default` tag
+   is attached, just pointing at a never-finalized `build_id`). The 429
+   error message ("contact support if you need more concurrent builds")
+   misleadingly suggests the cap is held by other org members; it isn't,
+   the zombies are ours.
+
+   Both `prepare_e2b_templates.py` and `repair_broken_templates.py` call
+   `clear_waiting_builds()` at startup — it lists everything our org owns
+   via `GET /templates`, finds entries with `buildStatus == "waiting"`,
+   and `DELETE`s each one (which frees the cap immediately). For ad-hoc
+   recovery without re-running prebuild, you can also do it inline:
+
+   ```python
+   import httpx, os
+   key = {"X-API-Key": os.environ["E2B_API_KEY"]}
+   for t in httpx.get("https://api.e2b.dev/templates", headers=key).json():
+       if t.get("buildStatus") == "waiting":
+           httpx.delete(f"https://api.e2b.dev/templates/{t['templateID']}", headers=key)
+   ```
 
 Examples:
 

@@ -33,8 +33,48 @@ import sys
 import tomllib
 from pathlib import Path
 
+import httpx
 from dirhash import dirhash
 from e2b import AsyncTemplate, RateLimitException, Template
+
+E2B_API = "https://api.e2b.dev"
+
+
+def clear_waiting_builds() -> int:
+    """Delete every template currently in `waiting` state (zombie builds).
+
+    These count against E2B's 20-concurrent-build org cap and never recover
+    on their own. Every interrupted `AsyncTemplate.build()` (e.g. via
+    RateLimit, network drop, or our own KeyboardInterrupt) leaves the
+    just-registered alias in `waiting`, so any retry sees the cap already
+    full and 429s — adding yet another zombie. Call this at the top of any
+    bulk-build script to break the cycle.
+    """
+    key = os.environ.get("E2B_API_KEY")
+    if not key:
+        return 0
+    headers = {"X-API-Key": key}
+    try:
+        r = httpx.get(f"{E2B_API}/templates", headers=headers, timeout=30)
+        r.raise_for_status()
+    except Exception as e:
+        print(f"  (clear_waiting_builds: list failed: {e})")
+        return 0
+    waiting = [t for t in r.json() if t.get("buildStatus") == "waiting"]
+    if not waiting:
+        return 0
+    print(f"  found {len(waiting)} zombie 'waiting' templates blocking the build cap; deleting them")
+    n_deleted = 0
+    for t in waiting:
+        tid = t.get("templateID")
+        if not tid:
+            continue
+        try:
+            httpx.delete(f"{E2B_API}/templates/{tid}", headers=headers, timeout=15)
+            n_deleted += 1
+        except Exception:
+            pass
+    return n_deleted
 
 
 def _parse_memory(spec) -> int:
@@ -125,6 +165,10 @@ async def main() -> None:
 
     if not os.environ.get("E2B_API_KEY"):
         sys.exit("E2B_API_KEY not set")
+
+    n_cleared = clear_waiting_builds()
+    if n_cleared:
+        print(f"  cleared {n_cleared} zombie 'waiting' templates from E2B\n", flush=True)
 
     task_dirs: list[Path] = []
     for root in args.tasks_root:

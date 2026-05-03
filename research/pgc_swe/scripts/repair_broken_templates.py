@@ -27,8 +27,50 @@ on top of that we have an 8-attempt exponential backoff for RateLimitException.
 """
 import asyncio, os, sys, tomllib
 from pathlib import Path
+import httpx
 from dirhash import dirhash
 from e2b import AsyncTemplate, RateLimitException, Template
+
+E2B_API = "https://api.e2b.dev"
+
+
+def clear_waiting_builds() -> int:
+    """Delete all templates currently in `waiting` buildStatus.
+
+    These are zombie builds left by cancelled/interrupted `AsyncTemplate.build`
+    calls (e.g. RateLimit during the upload phase). They count against E2B's
+    20-concurrent-build org cap forever — every retry that hits RateLimit
+    *adds another zombie*, so the situation snowballs into a permanent cap
+    saturation that no amount of backoff can recover from. The only fix is
+    DELETE-ing them via the templates REST API.
+
+    Returns the number of zombies deleted.
+    """
+    key = os.environ.get("E2B_API_KEY")
+    if not key:
+        return 0
+    headers = {"X-API-Key": key}
+    try:
+        r = httpx.get(f"{E2B_API}/templates", headers=headers, timeout=30)
+        r.raise_for_status()
+    except Exception as e:
+        print(f"  (clear_waiting_builds: list failed: {e})")
+        return 0
+    waiting = [t for t in r.json() if t.get("buildStatus") == "waiting"]
+    if not waiting:
+        return 0
+    print(f"  found {len(waiting)} zombie 'waiting' templates blocking the build cap; deleting them")
+    n_deleted = 0
+    for t in waiting:
+        tid = t.get("templateID")
+        if not tid:
+            continue
+        try:
+            httpx.delete(f"{E2B_API}/templates/{tid}", headers=headers, timeout=15)
+            n_deleted += 1
+        except Exception:
+            pass
+    return n_deleted
 
 TASKS_ROOT = Path("/scratch/yuzhou/projects/RL/3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks/skill_based/mixed/scientific_computing")
 TASK_IDS = ["0020","0022","0038","0090","0250","0263","0287","0332","0350","0385",
@@ -72,9 +114,24 @@ async def rebuild_one(task_dir, idx, total, sem):
 
 
 async def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--concurrency", type=int, default=1,
+                    help="parallel build slots (default 1 — serial). E2B's "
+                         "20-build cap is org-wide so concurrent retries from "
+                         "us tend to dogpile and re-fail at the same instant.")
+    args = ap.parse_args()
+
     if not os.environ.get("E2B_API_KEY"):
         sys.exit("E2B_API_KEY not set")
-    sem = asyncio.Semaphore(4)
+
+    # Clear any zombie waiting builds before we start. Without this, every
+    # subsequent build request will 429 even though no real build is running.
+    n_cleared = clear_waiting_builds()
+    if n_cleared:
+        print(f"  cleared {n_cleared} zombie 'waiting' templates from E2B\n")
+
+    sem = asyncio.Semaphore(args.concurrency)
     tasks = []
     for i, tid in enumerate(TASK_IDS, 1):
         d = TASKS_ROOT / f"scientific_computing_task_{tid}"
