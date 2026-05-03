@@ -83,17 +83,37 @@ export CPLUS_INCLUDE_PATH=/usr/local/cuda/include/cccl${CPLUS_INCLUDE_PATH:+:${C
 # cu130 stack — NCCL is now 2.28.9 — but for now don't set it; instead lower
 # `policy.generation.vllm_cfg.gpu_memory_utilization` to leave headroom.
 
-# `deep-ep` (RDMA-aware MoE all-to-all from DeepSeek) is in nemo-rl[vllm].
-# Building it from source needs `infiniband/mlx5dv.h` from rdma-core. The
-# system has no /usr/include/infiniband — install once via:
-#   conda install -n base -c conda-forge rdma-core -y
-# and point the build at the conda headers + libs:
-CONDA_PREFIX_RDMA=/scratch/yuzhou/miniconda3
-export CPATH="${CONDA_PREFIX_RDMA}/include${CPATH:+:${CPATH}}"
-export LIBRARY_PATH="${CONDA_PREFIX_RDMA}/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
-# Note: we keep the runtime LD_LIBRARY_PATH unset (see the unset above) — the
-# deep-ep .so links against rdma-core at build time but the runtime libibverbs
-# is found via the system /lib/x86_64-linux-gnu/libibverbs.so.1.
+# `deep-ep` (RDMA-aware MoE all-to-all from DeepSeek) needs
+# `infiniband/mlx5dv.h` from rdma-core to compile from source. Install
+# system-wide once via `sudo apt install libibverbs-dev rdma-core`. After
+# that the headers are at /usr/include/infiniband (gcc default search path)
+# and no env var is needed at build time. The runtime libibverbs is at
+# /lib/x86_64-linux-gnu/libibverbs.so.1, picked up via ld.so.cache.
+#
+# (We previously routed through a conda env at /scratch/yuzhou/miniconda3
+# via CPATH / LIBRARY_PATH; that's gone now. Two reasons: (1) leaving conda
+# on PATH causes Megatron-LM's runtime `helpers.cpp` build to invoke
+# conda's python3 instead of the mcore venv's, which fails with `No module
+# named pybind11`; (2) the conda env is host-specific so the launcher
+# wasn't portable across boxes.)
+#
+# Megatron-LM's `Megatron-LM/megatron/core/datasets/Makefile` builds a
+# pybind11 helper at runtime via:
+#     CPPFLAGS += $(shell python3 -m pybind11 --includes)
+#     LIBEXT   = $(shell python3-config --extension-suffix)
+# It's invoked from `compile_helpers()` (utils.py) with a bare
+# `subprocess.run(["make", ...])` — the make subprocess inherits the parent
+# Ray actor's PATH, NOT the venv's `bin/`. Whichever `python3` lives first
+# on PATH wins. Without help, that's whatever conda / system python the
+# user has, neither of which has pybind11 → the helper build fails →
+# MegatronPolicyWorker dies during dataset init with `c10::Error` cascade.
+#
+# Fix: strip conda from PATH and prepend the mcore worker venv's bin so
+# `python3` resolves to the venv's interpreter (which DOES have pybind11
+# from `nemo-rl[mcore]`'s deps).
+MCORE_VENV="${REPO_ROOT}/venvs/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker"
+export PATH="$(echo "${PATH}" | tr ':' '\n' | grep -v '/miniconda3/' | grep -v '/anaconda3/' | paste -sd ':')"
+export PATH="${MCORE_VENV}/bin:${PATH}"
 
 # transformer-engine + deep-ep + mamba-ssm + causal-conv1d need to be built
 # from CUDA sources into the per-worker mcore venv. NeMo RL's `_env_builder`
@@ -101,7 +121,7 @@ export LIBRARY_PATH="${CONDA_PREFIX_RDMA}/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
 # build fails (cmake missing, etc) the resulting venv silently lacks TE and
 # the megatron worker then crashes with `ModuleNotFoundError: transformer_engine`.
 # Pre-build into the venv ourselves (idempotent — uv reuses cached wheels):
-MCORE_VENV="${REPO_ROOT}/venvs/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker"
+# (MCORE_VENV is already exported above, in the PATH-hygiene block.)
 if [ ! -d "${MCORE_VENV}/lib/python3.13/site-packages/transformer_engine" ]; then
     echo "[run_harbor_e2b] pre-building transformer_engine + deps into mcore venv..."
     UV_PROJECT_ENVIRONMENT="${MCORE_VENV}" \
