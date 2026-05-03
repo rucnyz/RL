@@ -1,0 +1,35 @@
+# Requirements for the harbor_agent venv used by recipe B
+# (`grpo-qwen3.5-9b-1n8g-harbor-e2b.yaml`).
+#
+# Why this file lives in research/pgc_swe/ instead of the upstream
+# 3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/:
+#   We pin a different harbor commit than upstream and need an openai
+#   override to make it resolve. Keeping our pins inside research/pgc_swe/
+#   avoids dirtying the Gym submodule and means we can PR / share this
+#   project without forcing reviewers to also accept submodule deltas.
+#
+# The launcher (`run_harbor_e2b.sh`) does:
+#   uv pip install -r research/pgc_swe/configs/harbor_agent_requirements.txt \
+#       --override research/pgc_swe/configs/harbor_agent_overrides.txt \
+#       "ray==${NEMORL_RAY_VERSION}"
+# (the ray version is pinned at install-time to whatever the main NeMo RL
+# venv resolved to, so the harbor_agent Ray actor and the trainer agree on
+# Ray protocol version)
+
+# nemo-gym in editable mode from the Gym submodule (provides the agent
+# scaffolding + responses-api adapter). nemo-gym's pyproject pins
+# `openai<=2.7.2`; the override file forces a newer openai so that latest
+# harbor's litellm requirement resolves.
+#
+# `../..` is resolved relative to the current working directory, so the
+# launcher (`run_harbor_e2b.sh`) cd's into
+# `3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/` before
+# running `uv pip install -r <this_file>`. From there, `../..` points at
+# the Gym checkout — the same mechanism the upstream
+# `responses_api_agents/harbor_agent/requirements.txt` uses.
+-e ../..[dev]
+
+# Latest harbor (5e21c0b, 2026-04-30 main HEAD as of this writing).
+# Includes the `Template(file_context_path=...)` fix from PR #1397
+# (74c71f5) that we previously had to monkey-patch in run_harbor_e2b.sh.
+harbor @ git+https://github.com/laude-institute/harbor.git@5e21c0b5ba33417aefbae9b34623b1b166da898e

@@ -7,7 +7,7 @@ name = "pgc-swe"
 version = "0.1.0"
 description = "Proportional Gradient Clipping (PGC) on long-horizon SWE-bench RL — Qwen3.5-9B + NeMo RL + NeMo Gym (1-node baseline)."
 readme = "README.md"
-requires-python = ">=3.13.13"
+requires-python = ">=3.13.11"
 dependencies = ["nemo-rl"]
 
 [dependency-groups]

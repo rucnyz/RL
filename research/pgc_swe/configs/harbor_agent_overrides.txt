@@ -1,0 +1,15 @@
+# uv pip --override constraints for the harbor_agent venv.
+#
+# nemo-gym's pyproject pins `openai<=2.7.2` (added 2026-02-17, no upstream
+# rationale published). Latest harbor depends on litellm>=1.83.14 which
+# requires openai==2.24.0, so without an override the resolution fails:
+#
+#   harbor==0.6.4 -> litellm>=1.83.14 -> openai==2.24.0
+#   nemo-gym==0.3.0rc0 -> openai<=2.7.2
+#   ⇒ unsatisfiable
+#
+# We've verified the openai 2.24+ -> 2.7 changes don't break any of the
+# 14 openai symbols nemo-gym imports (chat completions, types.responses,
+# AsyncAzureOpenAI, etc. — Responses API types are stable across this
+# range). See repo audit summary in research/pgc_swe/README.md.
+openai>=2.24.0

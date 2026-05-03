@@ -49,17 +49,22 @@ checkpointing:
   save_consolidated: false
 
 grpo:
-  num_prompts_per_step: 1
+  # 8 prompts × 8 generations = 64 rollouts/step. Standard for agentic RL
+  # (terminal-bench-rl uses 256, larger setups use 512+). 64 keeps E2B at
+  # ~64 concurrent sandboxes (org cap appears to be ~100). num_generations
+  # stays at 8 because GRPO advantage estimation needs ≥2 per prompt and 8
+  # is the sweet spot for variance reduction.
+  num_prompts_per_step: 8
   num_generations_per_prompt: 8
   num_val_generations_per_prompt: 1
   max_rollout_turns: 1
   max_num_epochs: 1
-  max_num_steps: 5  # smoke test default
+  max_num_steps: 100  # full smoke run
   normalize_rewards: true
   use_leave_one_out_baseline: true
   advantage_clip_low: -100
   advantage_clip_high: 100
-  val_period: 100
+  val_period: 25
   val_at_start: false
   val_at_end: false
   overlong_filtering: true
@@ -90,6 +95,10 @@ grpo:
     target_min: 0.0
     target_max: 1.0
 
+  # 4 GPUs for vLLM rollout + 4 GPUs for Megatron training (non-colocated).
+  # async_grpo needs non-colocated (NeMo RL hard-asserts otherwise) and lets
+  # rollout collection overlap with policy update, so the GPU-idle gap during
+  # E2B sandbox waits is filled by the previous step's GRPO update.
   async_grpo:
     enabled: true
     max_trajectory_age_steps: 1
@@ -118,19 +127,29 @@ loss_fn:
   use_kl_in_reward: false
 
 policy:
-  model_name: Qwen/Qwen3.5-9B-Base
+  # Use the chat-tuned variant (no -Base) — harbor's terminus_2_nemo_gym
+  # agent wraps every prompt in ChatML (`<|im_start|>...<|im_end|>`), and
+  # the base model's tokenizer doesn't have `<|im_end|>` registered as
+  # tokenizer.eos_token. NeMo RL's vllm_worker_async then asserts
+  # `No EOS token ID found in the chat-templated messages!` and the policy
+  # server returns 500s for every rollout.
+  model_name: Qwen/Qwen3.5-9B
   tokenizer:
     name: ${policy.model_name}
+    # Qwen3.5 chat tokenizer has chat_template + eos_token = `<|im_end|>` baked
+    # in; no kwargs needed.
     chat_template_kwargs: null
   hf_config_overrides: {}
   train_global_batch_size: ${mul:${grpo.num_prompts_per_step}, ${grpo.num_generations_per_prompt}}
   train_micro_batch_size: 1
   generation_batch_size: 8
   logprob_batch_size: 1
-  # Harbor terminal tasks are typically shorter than full SWE-bench (no repo
-  # checkout, no test running). 32k is plenty for most multi-turn shell traces.
-  # Bump to 50k+ if you find traces hitting the cap.
-  max_total_sequence_length: 32768
+  # Qwen3.5 native context is 256k. Agentic terminal tasks easily hit 32k
+  # after a handful of debug iterations (each tool turn replays the full
+  # shell history); the rollout then trips ContextLengthExceededError on
+  # every trial. 262144 lets the agent breathe — it can write code, run
+  # tests, read errors, iterate ~50+ times before truncation.
+  max_total_sequence_length: 262144
   precision: bfloat16
   logprob_chunk_size: 2048
   offload_optimizer_for_logprob: false
@@ -168,7 +187,10 @@ policy:
     moe_aux_loss_coeff: 0.0
     moe_router_enable_expert_bias: false
     moe_shared_expert_overlap: false
-    apply_rope_fusion: true
+    # Qwen3.5's `apply_rotary_pos_emb_absolute` asserts
+    # `not config.apply_rope_fusion` — fused RoPE path doesn't support the
+    # absolute-position variant Qwen3.5 uses. Keep off.
+    apply_rope_fusion: false
     bias_activation_fusion: false
     defer_fp32_logits: true
     moe_per_layer_logging: false
@@ -230,7 +252,11 @@ policy:
     sequence_length_round: 64
 
   sequence_packing:
-    enabled: true
+    # Qwen3.5 has GDN (Gated Delta Net) layers that don't support packed
+    # sequences yet — `MegatronPolicyWorker.get_logprobs` errors with
+    # `NotImplementedError: GDN does not support packed sequence for now.`
+    # Use plain (non-packed) batching instead.
+    enabled: false
     train_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.train_micro_batch_size}}
     logprob_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.logprob_batch_size}}
     algorithm: modified_first_fit_decreasing
@@ -260,7 +286,9 @@ policy:
       tensor_parallel_size: 4
       pipeline_parallel_size: 1
       expert_parallel_size: 1
-      gpu_memory_utilization: 0.6
+      # Non-colocated mode → vLLM has its own 4 GPUs, no sharing with
+      # Megatron, can take a much bigger KV cache budget.
+      gpu_memory_utilization: 0.85
       max_model_len: ${policy.max_total_sequence_length}
       enforce_eager: false
       use_deep_gemm: false
@@ -279,21 +307,32 @@ policy:
       compilation_config:
         cudagraph_capture_sizes: [1, 2, 4, 8, 16]
     colocated:
-      enabled: true
+      # Non-colocated: vLLM rollout gets its own dedicated 4 GPUs (TP=4),
+      # Megatron policy gets the other 4 (also TP=4). Together they fill the
+      # whole 8-GPU node. Pairs with grpo.async_grpo.enabled=true so the two
+      # halves are pipelined.
+      enabled: false
       resources:
-        gpus_per_node: null
-        num_nodes: null
+        gpus_per_node: 4
+        num_nodes: 1
 
 data:
   max_input_seq_length: null
   shuffle: true
   num_workers: 1
+  use_multiple_dataloader: false
   train:
+    # Explicitly use NemoGymDataset (which loads our jsonl) — overrides the
+    # inherited grpo_math_1B.yaml `train.dataset_name: OpenMathInstruct-2`,
+    # which would otherwise pull 950k HuggingFace math samples.
+    dataset_name: NemoGymDataset
+    split_validation_size: 0.0
     # Generated from the harbor task list — each line is:
     #   {"instance_id": "<dataset_alias>::<task_name>", ...}
-    # See research/pgc_swe/scripts/prep_harbor_jsonl.py (TODO).
+    # See research/pgc_swe/scripts/prep_harbor_jsonl.py (run by run_harbor_e2b.sh).
     data_path: ???
   validation:
+    dataset_name: NemoGymDataset
     data_path: ???
   default:
     dataset_name: NemoGymDataset
@@ -325,9 +364,19 @@ env:
           # The bundled scientific_computing subset; swap to one of the other 5
           # subsets (data_processing / data_science / debugging / file_operations
           # / security) by tarring + setting local_dataset_path to that folder.
+          # Where harbor writes per-rollout artifacts (trajectory.json, verifier
+          # outputs, etc). Defaults to the literal placeholder "/path/to/..."
+          # in upstream harbor_agent.yaml — must override or every rollout
+          # crashes at mkdir.
+          harbor_jobs_dir: "${oc.env:HOME}/.cache/harbor_jobs"
+          # NOTE: local_dataset_path must be absolute. The harbor framework
+          # (job.py:_init_task_configs → models/job/config.py:78) calls
+          # `Path(self.path).iterdir()` directly without resolving against the
+          # Gym root, and the harbor_agent runner CWD doesn't match the
+          # config_paths root, so any relative path here will FileNotFoundError.
           harbor_datasets:
             scientific:
-              local_dataset_path: "responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks/skill_based/mixed/scientific_computing"
+              local_dataset_path: "/scratch/yuzhou/projects/RL/3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks/skill_based/mixed/scientific_computing"
               workdir: "/app"
           # 200 turns matches super-v3 / harbor README recommendation.
           harbor_agent_kwargs:
@@ -338,8 +387,11 @@ env:
             trajectory_config:
               raw_content: true
             model_info:
-              max_input_tokens: ${policy.max_total_sequence_length}
-              max_output_tokens: ${policy.max_total_sequence_length}
+              # Leave headroom for the actual response. Harbor otherwise
+              # builds a (max_input + 1)-token prompt and vLLM rejects with
+              # `VLLMValidationError`. With max_total_sequence_length=256k:
+              max_input_tokens: 196608   # 192k for context history
+              max_output_tokens: 32768   # 32k per assistant turn
               input_cost_per_token: 0.0
               output_cost_per_token: 0.0
     use_absolute_ip: true
@@ -364,5 +416,8 @@ logger:
     flush_interval: 10
 
 cluster:
+  # 8 GPUs with TP=4 → DP=2 (two model replicas, doubles rollout throughput).
+  # If you need to share the box with another user, drop to 4 here and set
+  # CUDA_VISIBLE_DEVICES=0,1,6,7 in run_harbor_e2b.sh.
   gpus_per_node: 8
   num_nodes: 1

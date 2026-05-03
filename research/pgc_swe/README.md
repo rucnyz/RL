@@ -72,13 +72,20 @@ Both recipes share the same training stack; only the agent / sandbox differs.
 
 Scaled down from super-v3's 16-node Nemotron-Nano-30B-A3B to 1-node Qwen3.5-9B
 dense:
-- TP/EP both reduced from 8 to 4 (no MoE on Qwen3.5-9B-Base).
-- max_total_sequence_length 131k → 50k for smoke tests (Qwen3.5-9B native
-  supports 256k; bump back to 131k once stable).
-- num_prompts_per_step 2 → 1, num_generations_per_prompt 32 → 8 (8 rollouts
-  per step total, fits 1 node concurrency).
-- gpu_memory_utilization 0.8 → 0.6.
-- concurrency 768 → 16 (single-node Apptainer load).
+- TP=4 + DP=2 (two model replicas across the 4 Megatron GPUs; no MoE on
+  Qwen3.5-9B). vLLM gets the other 4 GPUs (non-colocated, TP=4).
+- `max_total_sequence_length` 131k → **256k** (Qwen3.5-9B's native window;
+  we hit p90≈105k single-trajectory in scientific_computing).
+- `apply_rope_fusion: false` — Qwen3.5's `apply_rotary_pos_emb_absolute`
+  asserts `not config.apply_rope_fusion`.
+- `sequence_packing.enabled: false` — Qwen3.5's GDN attention layers raise
+  `NotImplementedError: GDN does not support packed sequence`.
+- `num_prompts_per_step` 2 → 8, `num_generations_per_prompt` 32 → 8 (64
+  rollouts per step total — typical for 1-node async GRPO).
+- `gpu_memory_utilization` 0.8 → 0.85 (non-colocated, vLLM owns its 4 GPUs).
+- harbor `max_input_tokens=196608, max_output_tokens=32768` (sum kept below
+  `max_total_sequence_length=262144` so harbor's vLLM context probe doesn't
+  over-shoot).
 
 ## Prerequisites
 
@@ -107,28 +114,189 @@ dense:
 
 ### Recipe B — harbor + E2B (default)
 
+One-time setup (already done on this machine — listed for reproducibility):
+
 ```bash
-# 1. one-time: download + unpack one subset of the dataset
-hf download nvidia/Nemotron-Terminal-Synthetic-Tasks --repo-type dataset \
-  --local-dir 3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks
-tar -xzf 3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks/skill_based/mixed/scientific_computing.tar.gz \
-  -C 3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks/skill_based/mixed/
+# 0. python toolchain — uv only ships up to 3.13.11 today; the upstream
+#    pyproject pins 3.13.13 which fails to resolve. Patched in research/pgc_swe.
+#
+# 0a. CUDA libs in LD_LIBRARY_PATH segfault /usr/bin/git inside uv subprocesses
+#     (it's only triggered through uv, manual git fetch works fine). Workaround:
+#     `unset LD_LIBRARY_PATH` before `uv sync`. The launcher script
+#     (`run_harbor_e2b.sh`) does this automatically.
 
-# 2. apply the upstream patch documented in harbor_agent README §"Required patches to Gym"
-#    (add "chat_template_kwargs" to the tokenize endpoint in
-#     3rdparty/Gym-workspace/Gym/responses_api_models/vllm_model/app.py)
+# 1. install NeMo RL + NeMo Gym (CUDA wheels — takes ~10 min)
+unset LD_LIBRARY_PATH
+uv sync --all-groups --extra nemo_gym
 
-# 3. set E2B_API_KEY in env
-export E2B_API_KEY=...
+# 2. one-time host packages (TE/deep-ep/mamba-ssm need to compile against
+#    rdma-core headers + cmake/ninja + pybind11 in the mcore venv)
+conda install -n base -c conda-forge rdma-core cmake ninja pybind11 -y
 
-# 4. run
-python examples/nemo_gym/run_grpo_nemo_gym.py \
-    --config research/pgc_swe/configs/grpo-qwen3.5-9b-1n8g-harbor-e2b.yaml \
-    data.train.data_path=$DATA_DIR/scientific_train.jsonl \
-    data.validation.data_path=$DATA_DIR/scientific_val.jsonl
+# 3. populate research/pgc_swe/.env from .env.example
+#    (E2B_API_KEY + WANDB_API_KEY)
+cp research/pgc_swe/.env.example research/pgc_swe/.env
+$EDITOR research/pgc_swe/.env
+
+# 4. download Nemotron-Terminal-Synthetic-Tasks
+.venv/bin/hf download nvidia/Nemotron-Terminal-Synthetic-Tasks \
+    --repo-type dataset \
+    --local-dir 3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks
 ```
 
-Expects `Tasks: 1/1` then training step logs in W&B (`nemo-rl/grpo-qwen3.5-9b-1n8g-harbor-e2b`).
+The upstream patch in harbor_agent README §"Required patches to Gym" (add
+`chat_template_kwargs` to the tokenize endpoint in
+`3rdparty/Gym-workspace/Gym/responses_api_models/vllm_model/app.py`) is
+**already applied upstream** in our checkout — verified line 397.
+
+See "Repo footprint" at the bottom of this README for the full list of
+files modified outside `research/pgc_swe/` and why each one is necessary.
+
+### Adding a harbor dataset
+
+Harbor's 80+ adapters all emit the same on-disk format:
+
+```
+<tasks_root>/
+  <task_name>/
+    task.toml             # [environment] cpus, memory, [docker_image]
+    environment/
+      Dockerfile          # base image + apt + pip + COPY files/
+      files/              # per-task input data
+    solution/             # gold solution (verifier ground truth)
+    tests/                # verifier scripts
+    instruction.md        # task prompt
+```
+
+`prepare_harbor_dataset.sh` accepts one or more `<alias>=<tasks_root>` pairs
+and runs the same pipeline regardless of whether the tasks come from
+Nemotron-Terminal-Synthetic-Tasks, terminal-bench, aider_polyglot,
+swe-bench, an in-house adapter, etc.:
+
+1. `strip_docker_image.py` (optional `--strip-docker-image`) — comment out
+   `docker_image = "..."` in every `task.toml`. Only needed when the
+   docker_image points at an inaccessible registry (Nemotron's adapter
+   ships gitlab-master refs); harbor then falls back to building from the
+   task-local Dockerfile.
+2. `patch_dataset.py` — two **idempotent** dataset bug-fixes (skip with
+   `--no-patch`):
+   * **Empty `environment/files/`** for tasks whose Dockerfile contains
+     `COPY files/ /app/` but ship without the `files/` directory. The E2B
+     SDK errors at `Template.from_dockerfile()` with `ValueError: No files
+     found in .../environment/files/` *before* registering the alias, so
+     harbor cannot spawn a sandbox for these tasks. ~21 such tasks in
+     Nemotron's `scientific_computing` subset.
+   * **Fractional reward** (default; opt out with `--binary-reward`) —
+     rewrites `tests/test.sh` to write `passed/total` (read from the CTRF
+     report pytest already produces) instead of binary `0/1`. Sparse
+     binary reward zeros out partial-pass trials (typically the majority
+     on hard tasks); fractional gives ~3× denser gradient signal. Use
+     `--binary-reward` if you specifically want `pass@1`-style eval
+     semantics.
+3. `prep_harbor_jsonl.py` — emit `<alias>_{train,val}.jsonl` under
+   `research/pgc_swe/data/` (90/10 split by default). The recipe yaml's
+   `harbor_datasets` map must list each alias you bring in.
+4. `prepare_e2b_templates.py` — pre-build **every task's E2B template
+   sequentially-ish** (concurrency 4 by default) so the first training
+   step's parallel rollouts don't race on `_create_template` for the same
+   template name. **This is critical** — without it, 8 simultaneous
+   rollouts of the same task all try to build the same E2B alias, E2B
+   cancels duplicates with `400: build was cancelled`, and the trainer
+   crashes on empty rollouts (the documented `IndexError: list index out
+   of range` at `rollouts.py:1185`). Pre-built templates are cached
+   server-side forever, so this is a one-time cost per dataset (~20-30 min
+   for 1000 tasks; subsequent shared layers cache).
+
+   **Recovery for "zombie" aliases**: if `RateLimitException` interrupts a
+   build mid-flight (E2B's 20-concurrent-build org cap), the alias can end
+   up registered server-side with a `default` tag pointing at a never-
+   finalized `build_id`. Both `alias_exists` and `get_tags` then
+   incorrectly report it as healthy, but every `sandbox.create()` 404s
+   with `tag 'default' does not exist for template ...`. Re-running
+   `prepare_e2b_templates.py` skips them as "CACHED". Run
+   `repair_broken_templates.py` against the affected tasks to force a
+   `skip_cache=True` rebuild that overwrites the zombie state.
+
+Examples:
+
+```bash
+# Nemotron scientific subset (needs --strip-docker-image because the
+# adapter ships unreachable gitlab refs)
+DATASET_ROOT="3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks"
+tar -xzf "${DATASET_ROOT}/skill_based/mixed/scientific_computing.tar.gz" \
+    -C "${DATASET_ROOT}/skill_based/mixed/"
+
+bash research/pgc_swe/scripts/prepare_harbor_dataset.sh \
+    --strip-docker-image \
+    scientific="${DATASET_ROOT}/skill_based/mixed/scientific_computing"
+
+# Multiple subsets at once
+bash research/pgc_swe/scripts/prepare_harbor_dataset.sh \
+    --strip-docker-image \
+    scientific="${DATASET_ROOT}/skill_based/mixed/scientific_computing" \
+    debugging="${DATASET_ROOT}/skill_based/mixed/debugging" \
+    file_ops="${DATASET_ROOT}/skill_based/mixed/file_operations"
+
+# An adapter-generated dataset with public docker_image refs (no strip needed)
+bash research/pgc_swe/scripts/prepare_harbor_dataset.sh \
+    polyglot="$HOME/datasets/aider_polyglot"
+
+# Skip prebuild (re-run JSONL generation only)
+bash research/pgc_swe/scripts/prepare_harbor_dataset.sh \
+    --no-prebuild scientific=...
+```
+
+#### Example: SWE-bench Pro
+
+Real-world software engineering benchmark, 731 tasks across Python/JS/TS/Go,
+public docker images (`jefzda/sweap-images` on Docker Hub) — so no
+`--strip-docker-image` needed. One-time setup to generate tasks via the
+upstream harbor adapter:
+
+```bash
+git clone https://github.com/laude-institute/harbor.git ~/harbor   # if not cloned
+cd ~/harbor/adapters/swebenchpro
+
+# Generate all 731 tasks (or use --limit / --language to subset)
+uv run swebenchpro --task-dir ~/datasets/swebenchpro
+# Use --language python  / --language js,ts  / --language go  to restrict.
+
+cd /scratch/yuzhou/projects/RL
+bash research/pgc_swe/scripts/prepare_harbor_dataset.sh \
+    swebench_pro="$HOME/datasets/swebenchpro"
+```
+
+This emits `data/swebench_pro_{train,val}.jsonl`, prebuilds 731 E2B
+templates, and prints the yaml block to add `swebench_pro` to your recipe's
+`harbor_datasets` map. The `instance_id` in each rollout looks like
+`swebench_pro::instance_protonmail__webclients-e65cc5f...`.
+
+Note: SWE-bench Pro Dockerfiles `FROM` the prebuilt `jefzda/sweap-images:*`
+which are large (~5-10 GB each); E2B's first build per instance pulls the
+base image, so the prebuild step is bandwidth-bound rather than CPU-bound
+and can take 1-2 hours for the full 731-task set. Subset with `--language`
+or `--limit` for a faster smoke run.
+
+After the script finishes it prints the yaml block to paste into your
+recipe's `harbor_datasets` map, and the `data.train.data_path` /
+`data.validation.data_path` overrides for your run command.
+
+The default recipe `grpo-qwen3.5-9b-1n8g-harbor-e2b.yaml` ships configured
+for the single `scientific` alias on the Nemotron `scientific_computing`
+subset; bring in more aliases by extending the yaml's `harbor_datasets`
+block and editing `run_harbor_e2b.sh` (or passing CLI overrides) to point
+at the combined train/val jsonl.
+
+Run:
+
+```bash
+bash research/pgc_swe/run_harbor_e2b.sh
+# Override defaults on the command line, e.g.
+#   bash research/pgc_swe/run_harbor_e2b.sh grpo.max_num_steps=20
+```
+
+Expects `Tasks: 1/1` then training step logs in W&B
+(`nemo-rl/grpo-qwen3.5-9b-1n8g-harbor-e2b`).
 
 ### Recipe A — real SWE-bench via Apptainer
 
@@ -141,6 +309,36 @@ python examples/nemo_gym/run_grpo_nemo_gym.py \
 ```
 
 Same trainer, just swap config — output goes to `nemo-rl/grpo-qwen3.5-9b-1n8g-swe`.
+
+## Repo footprint — what changes outside `research/pgc_swe/`?
+
+To keep this project PR-able, we keep all work inside `research/pgc_swe/`
+wherever possible. The full list of unavoidable changes elsewhere:
+
+### Forced by uv (cannot be moved)
+| File | Change | Why |
+|---|---|---|
+| `.python-version` | `3.13.13` → `3.13.11` | uv only ships interpreters up through 3.13.11 today. NeMo RL upstream bumped to 3.13.13 in PR #2243 but uv hasn't shipped that build yet. |
+| `pyproject.toml` | `requires-python = ">=3.13.13"` → `">=3.13.11"` | Same reason. Without this, `uv sync` refuses to resolve the workspace. |
+| `research/template_project/.python-version` + `pyproject.toml` | Same 3.13.13 → 3.13.11 bump | uv workspace requires every member to declare a consistent Python pin. `template_project` is an unrelated NeMo RL research starter; we don't touch its code, only its Python version pin. |
+| `uv.lock` | Cascades from the above | Auto-regenerated whenever `pyproject.toml` is changed; commit it so the lockfile is reproducible. |
+
+These should be reverted upstream once uv ships 3.13.13.
+
+### Submodules
+**No modifications.** We previously had a one-line pin bump in
+`3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/requirements.txt`,
+but the harbor pin + openai override now live in
+`research/pgc_swe/configs/harbor_agent_{requirements,overrides}.txt` and the
+launcher passes them to `uv pip install` directly, leaving the Gym checkout
+clean. Verify with `git -C 3rdparty/Gym-workspace/Gym status`.
+
+### System-level prerequisites (not files in the repo)
+| Artifact | Why |
+|---|---|
+| `/scratch/yuzhou/cuda_shim/libcudart.so.13` (zero-byte) | cuDNN frontend dlopens both libcudart.so.12 and .13 and throws `RuntimeError: Multiple libcudart libraries found` if both succeed. The system has CUDA 13.2 in ld.so.cache so the .13 dlopen always succeeds. A broken (zero-byte) `libcudart.so.13` in a high-priority `LD_LIBRARY_PATH` dir makes that dlopen fail, so cuDNN sees only the .12 from the torch wheel. The launcher creates this file on first run if missing. |
+| `conda install -n base -c conda-forge rdma-core cmake ninja pybind11` | `transformer_engine` + `deep-ep` + `mamba-ssm` + `causal-conv1d` need to compile from CUDA sources into the per-worker mcore venv; they need rdma-core headers (`infiniband/mlx5dv.h` for deep-ep) and the build toolchain. Once installed, the launcher exports `CPATH`/`LIBRARY_PATH` to point at the conda prefix during the venv build. |
+| Dataset under `3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks/` | Downloaded once via `hf download`; modified in place by `scripts/patch_dataset.py` (empty `environment/files/` + fractional reward). The dataset is gitignored inside the Gym submodule, so these mutations do not show up in `git status`. |
 
 ## TODO (PGC integration)
 
