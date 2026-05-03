@@ -335,11 +335,34 @@ wherever possible. The full list of unavoidable changes elsewhere:
 | File | Change | Why |
 |---|---|---|
 | `.python-version` | `3.13.13` → `3.13.11` | uv only ships interpreters up through 3.13.11 today. NeMo RL upstream bumped to 3.13.13 in PR #2243 but uv hasn't shipped that build yet. |
-| `pyproject.toml` | `requires-python = ">=3.13.13"` → `">=3.13.11"` | Same reason. Without this, `uv sync` refuses to resolve the workspace. |
+| `pyproject.toml` (top of file) | `requires-python = ">=3.13.13"` → `">=3.13.11"` | Same reason. Without this, `uv sync` refuses to resolve the workspace. |
 | `research/template_project/.python-version` + `pyproject.toml` | Same 3.13.13 → 3.13.11 bump | uv workspace requires every member to declare a consistent Python pin. `template_project` is an unrelated NeMo RL research starter; we don't touch its code, only its Python version pin. |
 | `uv.lock` | Cascades from the above | Auto-regenerated whenever `pyproject.toml` is changed; commit it so the lockfile is reproducible. |
 
 These should be reverted upstream once uv ships 3.13.13.
+
+### Ported from upstream PR #2332 (CUDA 13 migration)
+We're running on a B300 (Blackwell Ultra, sm_103) which only has CUDA 13.2
+in `/usr/local/cuda` — the cu129 stack pinned in NeMo RL `main` won't load
+(`libcudart.so.12` is not present, and ptxas 12.x can't target sm_103).
+
+NeMo RL upstream is mid-migration in **issue #2111 / PR #2332**
+("chore: Enable cuda-13 build", currently OPEN draft). We've imported PR
+#2332's pyproject + workspace setup.py changes ahead of merge so we can
+build on B300 now. The diff is mechanical (cu129 → cu130 indexes, cu12 →
+cu13 nvidia wheels, transformer-engine `core_cu12` → `core_cu13`,
+flash-attn / vllm switched to cu13 GitHub release wheels). When PR #2332
+lands upstream, our diff against `main` for this section drops to zero.
+
+| File | Change | Source |
+|---|---|---|
+| `pyproject.toml` (deps + sources + override-dependencies) | cu129 → cu130, cu12 → cu13 across torch/nvidia/TE/flash-attn/vllm pins | verbatim from PR #2332 |
+| `3rdparty/Megatron-LM-workspace/setup.py` | `core_cu12` → `core_cu13`, drop `_normalize_te_cuda` consistency-check shim | verbatim from PR #2332 |
+| `3rdparty/Megatron-Bridge-workspace/setup.py` | same | verbatim from PR #2332 |
+| `uv.lock` | Regenerated from above | local |
+
+Skipped from PR #2332 (not relevant to bare-metal runs): `docker/Dockerfile`
+base image bump and SGLang build-parallelism tweak.
 
 ### Submodules
 **No modifications.** We previously had a one-line pin bump in

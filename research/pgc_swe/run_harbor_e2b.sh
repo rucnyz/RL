@@ -43,35 +43,34 @@ DATA_DIR="${REPO_ROOT}/research/pgc_swe/data"
 # machine. Strip it for the trainer; CUDA libs come from the .venv wheels.
 unset LD_LIBRARY_PATH
 
-# cuDNN frontend shim probes for both libcudart.so.12 and libcudart.so.13 via
-# dlopen — if both succeed it throws `RuntimeError: Multiple libcudart
-# libraries found`. The system has /usr/local/cuda → 13.2 in ld.so.cache, so
-# the .13 dlopen always succeeds in addition to torch's .12. Mask .13 with a
-# broken file in a high-priority LD_LIBRARY_PATH dir so its dlopen fails.
-CUDA13_SHIM_DIR=/scratch/yuzhou/cuda_shim
-if [ ! -e "${CUDA13_SHIM_DIR}/libcudart.so.13" ]; then
-    mkdir -p "${CUDA13_SHIM_DIR}"
-    : > "${CUDA13_SHIM_DIR}/libcudart.so.13"  # zero-byte file → dlopen fails
-fi
-export LD_LIBRARY_PATH="${CUDA13_SHIM_DIR}"
-
-# System default `/usr/local/cuda` is 13.2 on this box, but torch wheels are
-# cu129 — when NeMo Gym's `_env_builder` Ray actor builds `deep-ep` from
-# source, torch.utils.cpp_extension errors out on the major-version mismatch.
-# Pin to /usr/local/cuda-12.8 (12.8 vs 12.9 only triggers a warning, not a
-# RuntimeError, since torch only hard-fails on differing CUDA major).
-export CUDA_HOME=/usr/local/cuda-12.8
+# Use system CUDA 13.2 — matches torch+cu130 wheels in our pyproject (we
+# ported NeMo RL upstream PR #2332's cu13 migration). System default
+# /usr/local/cuda symlinks to /usr/local/cuda-13.2 on both H200 (sm_90) and
+# B300 (sm_103). nvcc/ptxas in here is what `deep-ep`, `transformer-engine`,
+# `mamba-ssm`, `causal-conv1d` will pick up when their setup.py invokes
+# torch.utils.cpp_extension.
+export CUDA_HOME=/usr/local/cuda-13.2
 export PATH="${CUDA_HOME}/bin:${PATH}"
 
-# H200 = compute capability 9.0 (Hopper). Megatron's worker_extension refuses
-# to start without this set (it doesn't fall back to torch.cuda.get_device_capability()
-# inside Ray subprocesses where CUDA may not be initialized yet).
-export TORCH_CUDA_ARCH_LIST="9.0"
+# Cover Hopper (sm_90, H200) + Blackwell base (sm_100, B200). B300 reports
+# sm_103 in nvidia-smi but PTX targets are forward-compatible from sm_100,
+# so a kernel built for 10.0 runs on 10.3. Listing both keeps the same
+# build artifacts usable across both classes of GPU on the same box.
+# Megatron's worker_extension refuses to start without this set inside Ray
+# subprocesses where CUDA may not be initialized yet.
+export TORCH_CUDA_ARCH_LIST="9.0 10.0"
+
+# CUDA 13 moved a chunk of the standard library headers into
+# include/cccl. deep_gemm and similar build-from-source kernels include
+# <cuda/std/...> directly and fail at compile if cccl/ isn't on the include
+# path. Mirror PR #2332's Dockerfile env var.
+export CPLUS_INCLUDE_PATH=/usr/local/cuda/include/cccl${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}
 
 # Note: `PYTORCH_ALLOC_CONF=expandable_segments:True` would help fragmentation
-# during the Megatron→vLLM refit all_gather, but it crashes vLLM's NCCL init
-# (`Failed to CUDA calloc async 16 bytes` at `determine_available_memory`) on
-# H200 + NCCL 2.27.5 + vllm 0.17.1. Don't set it; instead lower
+# during the Megatron→vLLM refit all_gather, but it crashed vLLM's NCCL init
+# (`Failed to CUDA calloc async 16 bytes` at `determine_available_memory`)
+# on the H200 + NCCL 2.27.5 + vllm 0.17.1 cu129 stack. Re-evaluate with the
+# cu130 stack — NCCL is now 2.28.9 — but for now don't set it; instead lower
 # `policy.generation.vllm_cfg.gpu_memory_utilization` to leave headroom.
 
 # `deep-ep` (RDMA-aware MoE all-to-all from DeepSeek) is in nemo-rl[vllm].
