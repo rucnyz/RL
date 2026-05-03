@@ -262,6 +262,53 @@ bash research/pgc_swe/scripts/prepare_harbor_dataset.sh \
     --no-prebuild scientific=...
 ```
 
+#### Pre-built datasets (E2B templates ready to use)
+
+These have already been run through `prepare_harbor_dataset.sh` against
+this org's E2B account. Templates are cached server-side, so a fresh
+training run picks them up with zero per-task build cost.
+
+| Subset | Tasks | Source | yaml alias suggestion | Status |
+|---|---:|---|---|---|
+| `scientific_computing` | 1000 | Nemotron `skill_based/mixed/` | `scientific` | ✅ ready |
+| `data_processing` | 1000 | Nemotron `skill_based/mixed/` | `data_processing` | ⏳ in progress |
+| `data_science` | 1000 | Nemotron `skill_based/mixed/` | `data_science` | ⏳ in progress |
+| `debugging` | 1000 | Nemotron `skill_based/mixed/` | `debugging` | ⏳ in progress |
+| `file_operations` | 997 | Nemotron `skill_based/mixed/` | `file_ops` | ⏳ in progress |
+| `security` | 987 | Nemotron `skill_based/mixed/` | `security` | ⏳ in progress |
+
+To use any of these in a recipe, add an entry to the yaml's
+`harbor_datasets` map (keyed by alias) and point
+`data.{train,validation}.data_path` at the JSONL files under
+`research/pgc_swe/data/`. E.g. to train on debugging instead of
+scientific_computing:
+
+```yaml
+env:
+  nemo_gym:
+    harbor_agent:
+      responses_api_agents:
+        harbor_agent:
+          harbor_agent_kwargs:
+            harbor_datasets:
+              debugging:
+                local_dataset_path: "${...}/skill_based/mixed/debugging"
+                workdir: "/app"
+```
+```bash
+bash research/pgc_swe/run_harbor_e2b.sh \
+    data.train.data_path=research/pgc_swe/data/debugging_train.jsonl \
+    data.validation.data_path=research/pgc_swe/data/debugging_val.jsonl
+```
+
+Datasets we have on disk but **have not yet prebuilt** (different
+categorization or larger scale; prebuild on demand):
+
+| Subset | Tasks | Notes |
+|---|---:|---|
+| `easy_5000` | 5000 | Difficulty-curated; spans multiple skill types (data_science, model_training, ...) |
+| `medium_20000` | 20000 | Same as above, harder difficulty bucket |
+
 #### Example: SWE-bench Pro
 
 Real-world software engineering benchmark, 731 tasks across Python/JS/TS/Go,
