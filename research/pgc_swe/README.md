@@ -274,11 +274,11 @@ training run picks them up with zero per-task build cost.
 | Subset | Tasks | Source | yaml alias suggestion | Status |
 |---|---:|---|---|---|
 | `scientific_computing` | 1000 | Nemotron `skill_based/mixed/` | `scientific` | ✅ ready |
-| `data_processing` | 1000 | Nemotron `skill_based/mixed/` | `data_processing` | ⏳ in progress |
-| `data_science` | 1000 | Nemotron `skill_based/mixed/` | `data_science` | ⏳ in progress |
-| `debugging` | 1000 | Nemotron `skill_based/mixed/` | `debugging` | ⏳ in progress |
-| `file_operations` | 997 | Nemotron `skill_based/mixed/` | `file_ops` | ⏳ in progress |
-| `security` | 987 | Nemotron `skill_based/mixed/` | `security` | ⏳ in progress |
+| `data_processing` | 1000 | Nemotron `skill_based/mixed/` | `data_processing` | ✅ ready |
+| `data_science` | 1000 | Nemotron `skill_based/mixed/` | `data_science` | ✅ ready |
+| `debugging` | 1000 | Nemotron `skill_based/mixed/` | `debugging` | ✅ ready |
+| `file_operations` | 997 | Nemotron `skill_based/mixed/` | `file_ops` | ✅ ready |
+| `security` | 987 | Nemotron `skill_based/mixed/` | `security` | ✅ ready |
 
 To use any of these in a recipe, add an entry to the yaml's
 `harbor_datasets` map (keyed by alias) and point
