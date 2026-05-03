@@ -129,9 +129,12 @@ One-time setup (already done on this machine — listed for reproducibility):
 unset LD_LIBRARY_PATH
 uv sync --all-groups --extra nemo_gym
 
-# 2. one-time host packages (TE/deep-ep/mamba-ssm need to compile against
-#    rdma-core headers + cmake/ninja + pybind11 in the mcore venv)
-conda install -n base -c conda-forge rdma-core cmake ninja pybind11 -y
+# 2. one-time host packages (system-wide):
+#    - rdma-core / libibverbs-dev: deep_ep needs infiniband/mlx5dv.h to compile
+#    - libnccl-dev:                TE needs nccl.h (NCCL ships separately from
+#                                  cuda-toolkit-13-2 on bare metal)
+#    - cmake / ninja:              build toolchain for TE / deep_ep
+sudo apt install -y libibverbs-dev rdma-core libnccl-dev cmake ninja-build
 
 # 3. populate research/pgc_swe/.env from .env.example
 #    (E2B_API_KEY + WANDB_API_KEY)
@@ -422,8 +425,9 @@ clean. Verify with `git -C 3rdparty/Gym-workspace/Gym status`.
 ### System-level prerequisites (not files in the repo)
 | Artifact | Why |
 |---|---|
-| `/scratch/yuzhou/cuda_shim/libcudart.so.13` (zero-byte) | cuDNN frontend dlopens both libcudart.so.12 and .13 and throws `RuntimeError: Multiple libcudart libraries found` if both succeed. The system has CUDA 13.2 in ld.so.cache so the .13 dlopen always succeeds. A broken (zero-byte) `libcudart.so.13` in a high-priority `LD_LIBRARY_PATH` dir makes that dlopen fail, so cuDNN sees only the .12 from the torch wheel. The launcher creates this file on first run if missing. |
-| `conda install -n base -c conda-forge rdma-core cmake ninja pybind11` | `transformer_engine` + `deep-ep` + `mamba-ssm` + `causal-conv1d` need to compile from CUDA sources into the per-worker mcore venv; they need rdma-core headers (`infiniband/mlx5dv.h` for deep-ep) and the build toolchain. Once installed, the launcher exports `CPATH`/`LIBRARY_PATH` to point at the conda prefix during the venv build. |
+| `sudo apt install libibverbs-dev rdma-core` (or conda equivalent) | `deep_ep` (RDMA-aware MoE all-to-all from DeepSeek) needs `infiniband/mlx5dv.h` to compile from source. Without these the deep_ep wheel build fails with `mlx5dv.h: No such file or directory`. |
+| `sudo apt install libnccl-dev` | NCCL is **not** part of `cuda-toolkit-13-2`; NVIDIA ships it separately. Without `libnccl-dev`, TE rev 71bbefbf fails to build with `fatal error: nccl.h: No such file or directory` because `transformer_engine/common/util/logging.h:15` `#include`s nccl.h unconditionally while CMakeLists.txt only adds the nccl include path when `NVTE_WITH_CUBLASMP=ON`. NVIDIA's `nvcr.io/cuda-dl-base` docker image masks this because nccl ships there alongside cuda. After `apt install` nccl.h lives at `/usr/include/nccl.h` (gcc default search path), so no env-var workaround is needed. |
+| `cmake`, `ninja` (Ubuntu ≥24 ships these) | Build toolchain for TE / deep_ep. `cmake>=3.21` required by TE; system cmake on Ubuntu 24 satisfies it. `ninja` is the default uv generator. |
 | Dataset under `3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent/data/nemotron_terminal_synthetic_tasks/` | Downloaded once via `hf download`; modified in place by `scripts/patch_dataset.py` (empty `environment/files/` + fractional reward). The dataset is gitignored inside the Gym submodule, so these mutations do not show up in `git status`. |
 
 ## TODO (PGC integration)
