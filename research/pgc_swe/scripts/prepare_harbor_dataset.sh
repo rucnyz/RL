@@ -181,24 +181,31 @@ fi
 # 3. prebuild templates across all roots in one pass (the prebuild script
 #    accepts multiple --tasks-root args).
 #
-# Uses the harbor_agent venv's python (not the main NeMo RL .venv): the
-# prebuild script imports `from e2b import AsyncTemplate, ...` which only
-# lives in harbor's `[e2b]` extra. The main .venv has nemo-rl + nemo_gym
-# but neither pulls e2b, so calling the script from there fails with
-# `ModuleNotFoundError: No module named 'e2b'`.
+# Prefers the harbor_agent venv (whose `[e2b]` extra is what defined the SDK
+# pull-in originally). Falls back to the main NeMo RL .venv if the harbor
+# venv hasn't been built yet AND main .venv happens to already have the SDK
+# (e.g. on H200 where main .venv was synced with the e2b dep before the
+# harbor venv split was introduced). Errors out if neither has it.
 HARBOR_AGENT_DIR="${REPO_ROOT}/3rdparty/Gym-workspace/Gym/responses_api_agents/harbor_agent"
 HARBOR_PYTHON="${HARBOR_AGENT_DIR}/.venv/bin/python"
+MAIN_PYTHON="${REPO_ROOT}/.venv/bin/python"
 if [ "${DO_PREBUILD}" = "true" ]; then
-    if [ ! -x "${HARBOR_PYTHON}" ]; then
-        echo "ERROR: harbor_agent venv not built yet — run the launcher once" >&2
-        echo "       to populate ${HARBOR_AGENT_DIR}/.venv, then re-run this." >&2
+    if [ -x "${HARBOR_PYTHON}" ]; then
+        PREBUILD_PYTHON="${HARBOR_PYTHON}"
+    elif [ -x "${MAIN_PYTHON}" ] && "${MAIN_PYTHON}" -c "import e2b" 2>/dev/null; then
+        echo "[prepare_harbor_dataset] harbor venv missing; falling back to main .venv (it has e2b)" >&2
+        PREBUILD_PYTHON="${MAIN_PYTHON}"
+    else
+        echo "ERROR: no python with the e2b SDK available." >&2
+        echo "       Build the harbor venv with:  bash research/pgc_swe/run_harbor_e2b.sh" >&2
+        echo "       (or install e2b into ${MAIN_PYTHON%/python}/, then re-run this)." >&2
         exit 2
     fi
     prebuild_args=(--tasks-root "${ROOTS[@]}" --concurrency "${PREBUILD_CONCURRENCY}")
     if [ -n "${PREBUILD_LIMIT}" ]; then
         prebuild_args+=(--limit "${PREBUILD_LIMIT}")
     fi
-    "${HARBOR_PYTHON}" "${SCRIPT_DIR}/prepare_e2b_templates.py" "${prebuild_args[@]}"
+    "${PREBUILD_PYTHON}" "${SCRIPT_DIR}/prepare_e2b_templates.py" "${prebuild_args[@]}"
 fi
 
 set +x
